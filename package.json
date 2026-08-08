@@ -20,6 +20,8 @@
     "build": "npm --workspace @pixmyd/studio run build"
   },
   "devDependencies": {
+    "fflate": "^0.8.3",
+    "three": "^0.185.1",
     "typescript": "^5.9.2"
   }
 }
