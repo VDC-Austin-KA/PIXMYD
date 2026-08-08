@@ -1,0 +1,12 @@
+{
+  "name": "@pixmyd/core",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts",
+    "./math": "./src/math.ts",
+    "./bytes": "./src/bytes.ts",
+    "./bundle": "./src/bundle.ts"
+  }
+}

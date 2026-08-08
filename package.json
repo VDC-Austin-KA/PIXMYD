@@ -1,0 +1,25 @@
+{
+  "name": "pixmyd",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Free, open reality-capture toolchain: capture on any hardware, process on-device, export to the formats engineering actually uses.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.6"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/studio"
+  ],
+  "scripts": {
+    "test": "node --test --experimental-strip-types \"packages/*/test/*.test.ts\"",
+    "test:watch": "node --test --watch --experimental-strip-types \"packages/*/test/*.test.ts\"",
+    "typecheck": "tsc --build",
+    "dev": "npm --workspace @pixmyd/studio run dev",
+    "build": "npm --workspace @pixmyd/studio run build"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2"
+  }
+}
