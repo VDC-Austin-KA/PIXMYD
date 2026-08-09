@@ -48,7 +48,7 @@ is parsed back by three.js's loaders in the test suite.
 ## What works today
 
 Everything listed here is implemented and covered by the test suite
-(`npm test`, 153 tests, no network access required).
+(`npm test`, 168 tests, no network access required).
 
 ### Export formats — `packages/formats`
 
@@ -108,8 +108,26 @@ There is a test for exactly that case.
   and equirectangular — so a drone, an action camera and a stitched 360
   panorama share one reconstruction path.
 - **TSDF fusion**: sparse-block Curless & Levoy volumetric integration from
-  depth frames and poses, with confidence gating and colour, plus zero-crossing
-  point extraction.
+  depth frames and poses, with confidence gating and colour.
+- **Surface extraction**: marching tetrahedra — 16 unambiguous sign cases per
+  tetrahedron rather than 256 cases with genuinely ambiguous configurations, so
+  the surface is manifold by construction. Unobserved voxels return *null*
+  rather than a large positive distance, so unseen regions stay open: an
+  as-built with an honest hole is a note to go back to site, one with an
+  invented lid is a measurement that was never taken.
+
+### iOS capture app — `apps/ios`
+
+ARKit + LiDAR capture, RTK GNSS over MFi/Bluetooth with an NTRIP client,
+on-device fusion and export. Four tabs — Capture, Projects, Survey, Account.
+
+**The source has not been compiled** — it was written on Linux, where no Swift
+toolchain exists. See [`apps/ios/README.md`](apps/ios/README.md) for build steps
+and an honest list of what would bite first.
+
+This app exists because iPhone LiDAR is not reachable from a web page — not
+through WebXR, not `getUserMedia`, not anything in flight. Everything else in
+PIXMYD is deliberately a web toolchain.
 
 ### Capture bundle — `packages/core`
 
@@ -121,8 +139,6 @@ downstream needs a per-device special case.
 
 Stated plainly so nobody plans around vapour:
 
-- **Surface extraction to a mesh.** TSDF fusion produces the field and point
-  extraction; marching-tetrahedra meshing is next.
 - **Gaussian splat training.** The export path is complete and tested; the
   WebGPU trainer that produces the splats is not written.
 - **Structure-from-motion.** Nothing yet solves poses from images alone, so
@@ -139,7 +155,8 @@ None of the above has been run against real hardware or a real survey network.
 packages/core      math, binary IO, the capture bundle schema
 packages/formats   PLY, GLB, OBJ, FBX, E57, LAS readers and writers
 packages/geo       ellipsoids, projections, State Plane, registration, NMEA
-packages/recon     camera models, TSDF fusion
+packages/recon     camera models, TSDF fusion, marching tetrahedra
+apps/ios           the Swift capture app (uncompiled)
 ```
 
 ## Running it
