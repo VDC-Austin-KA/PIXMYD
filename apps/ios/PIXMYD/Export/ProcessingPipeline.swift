@@ -306,7 +306,7 @@ final class ProcessingPipeline: ObservableObject {
             bundle.appendingPathComponent(uri) as CFURL, nil
         ), let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
         let width = image.width, height = image.height
-        guard width > 0, height > 0 else { return nil }
+        guard width > 0, height > 0, let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
         var pixels = [UInt8](repeating: 0, count: width * height * 4)
         guard let context = CGContext(
             data: &pixels,
@@ -314,7 +314,7 @@ final class ProcessingPipeline: ObservableObject {
             height: height,
             bitsPerComponent: 8,
             bytesPerRow: width * 4,
-            space: CGColorSpace(name: CGColorSpace.sRGB),
+            space: colorSpace,
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { return nil }
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
