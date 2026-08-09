@@ -86,6 +86,7 @@ final class ProcessingPipeline: ObservableObject {
         state = .running(stage: "Reading capture", fraction: 0)
 
         task = Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
             do {
                 let result = try await Self.process(
                     project: project,
@@ -93,17 +94,17 @@ final class ProcessingPipeline: ObservableObject {
                     quality: quality
                 ) { stage, fraction in
                     await MainActor.run {
-                        self?.state = .running(stage: stage, fraction: fraction)
+                        self.state = .running(stage: stage, fraction: fraction)
                     }
                 }
                 await MainActor.run {
-                    self?.state = .finished(url: result.url, summary: result.summary)
+                    self.state = .finished(url: result.url, summary: result.summary)
                 }
             } catch is CancellationError {
-                await MainActor.run { self?.state = .idle }
+                await MainActor.run { self.state = .idle }
             } catch {
                 await MainActor.run {
-                    self?.state = .failed(error.localizedDescription)
+                    self.state = .failed(error.localizedDescription)
                 }
             }
         }
