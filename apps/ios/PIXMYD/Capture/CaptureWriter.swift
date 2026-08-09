@@ -87,14 +87,9 @@ actor CaptureWriter {
             notes: nil
         )
 
-        func openAppend(_ name: String) throws -> FileHandle {
-            let url = root.appendingPathComponent(name)
-            fm.createFile(atPath: url.path, contents: nil)
-            return try FileHandle(forWritingTo: url)
-        }
-        framesHandle = try openAppend("frames.jsonl")
-        imuHandle = try openAppend("imu.jsonl")
-        gnssHandle = try openAppend("gnss.jsonl")
+        framesHandle = try Self.openAppend(named: "frames.jsonl", in: root)
+        imuHandle = try Self.openAppend(named: "imu.jsonl", in: root)
+        gnssHandle = try Self.openAppend(named: "gnss.jsonl", in: root)
 
         // Exclude from iCloud backup. A 4 GB scan silently consuming somebody's
         // iCloud quota is a bad surprise, and the deliverable is the export.
@@ -109,6 +104,14 @@ actor CaptureWriter {
         let directory = base.appendingPathComponent("Projects", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
+    }
+
+    /// Opens a newline-delimited JSON log for appending. A static helper rather
+    /// than a local closure so it never captures `self` mid-initialization.
+    private static func openAppend(named name: String, in root: URL) throws -> FileHandle {
+        let url = root.appendingPathComponent(name)
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        return try FileHandle(forWritingTo: url)
     }
 
     // MARK: - Appending
