@@ -1,0 +1,18 @@
+{
+  "name": "@pixmyd/features",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "@pixmyd/core": "*",
+    "@pixmyd/sfm": "*"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./image": "./src/image.ts",
+    "./detect": "./src/detect.ts",
+    "./descriptor": "./src/descriptor.ts",
+    "./match": "./src/match.ts",
+    "./pipeline": "./src/pipeline.ts"
+  }
+}

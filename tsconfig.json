@@ -5,6 +5,12 @@
       "node"
     ],
     "paths": {
+      "@pixmyd/features": [
+        "./packages/features/src/index.ts"
+      ],
+      "@pixmyd/features/*": [
+        "./packages/features/src/*.ts"
+      ],
       "@pixmyd/core": [
         "./packages/core/src/index.ts"
       ],

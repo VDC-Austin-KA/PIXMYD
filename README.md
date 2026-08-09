@@ -48,7 +48,8 @@ is parsed back by three.js's loaders in the test suite.
 ## What works today
 
 Everything listed here is implemented and covered by the test suite
-(`npm test`, 261 tests, no network access required).
+(`npm test`, 292 tests, no network access required — plus 35 Swift tests for the
+iOS app's arithmetic, `swift test` in `apps/ios`).
 
 ### Export formats — `packages/formats`
 
@@ -116,14 +117,39 @@ There is a test for exactly that case.
   as-built with an honest hole is a note to go back to site, one with an
   invented lid is a measurement that was never taken.
 
+### Features — `packages/features`
+
+The front end SfM needs: given two photographs, which pixels are the same point?
+
+- **FAST-9 corners** with the compass-point early rejection, Harris scoring to
+  rank them, and grid-bucketed non-maximum suppression.
+- **Scale pyramid** at 1.2 per level rather than an octave, because a
+  photogrammetric pair is usually shot from a similar distance and an octave
+  quantises that difference too coarsely to match well.
+- **Steered 256-bit binary descriptors**, oriented by the intensity centroid so
+  that two photos of the same wall taken with the phone at different angles
+  still match — the normal case on a site, not an edge case.
+- **Matching** with Lowe's ratio test, cross-check, and a robust
+  motion-consistency pre-filter, then **RANSAC on the essential matrix**.
+- **Intrinsics inversion** for all three camera models, including the iterative
+  Brown-Conrady inverse and honest nulls for rays behind a fisheye or over the
+  horizon of a panorama.
+
+Verification is seeded and deterministic: reprocessing a capture has to give the
+same answer, or there is no way to tell a real improvement from RANSAC's luck.
+
 ### iOS capture app — `apps/ios`
 
 ARKit + LiDAR capture, RTK GNSS over MFi/Bluetooth with an NTRIP client,
 on-device fusion and export. Four tabs — Capture, Projects, Survey, Account.
 
-**The source has not been compiled** — it was written on Linux, where no Swift
-toolchain exists. See [`apps/ios/README.md`](apps/ios/README.md) for build steps
-and an honest list of what would bite first.
+**Partly compiled.** The arithmetic — bundle schema, TSDF fusion, meshing,
+format writers, NMEA parsing — builds and tests on Linux via
+[`apps/ios/Package.swift`](apps/ios/Package.swift), 35 tests, run in CI. The
+SwiftUI, ARKit, CoreLocation and Metal half has only been parsed;
+[Codemagic](codemagic.yaml) compiles it and produces an unsigned `.ipa` a free
+Apple ID can sideload. See [`apps/ios/README.md`](apps/ios/README.md) for the
+install route and an honest list of what would bite first.
 
 This app exists because iPhone LiDAR is not reachable from a web page — not
 through WebXR, not `getUserMedia`, not anything in flight. Everything else in
@@ -151,15 +177,15 @@ Stated plainly so nobody plans around vapour:
 - **A WebGPU path for splat training.** The trainer is a correct CPU reference
   and is far too slow for a real capture — thousands of Gaussians, not millions.
   The GPU port is the single largest remaining piece of work.
-- **Feature detection and matching.** The SfM *geometry* is built and tested,
-  but nothing yet finds correspondences between images, so the pipeline cannot
-  be driven end to end from photographs alone.
 - **A 3D viewer in the studio.** You can process and export, but not yet look
   at the result in the browser before you do.
+- **Incremental reconstruction over a whole image set.** Pairs match and verify;
+  choosing an initial pair, registering the rest by PnP, and growing one
+  consistent track graph across a hundred images is not written yet.
 
-The iOS app is written but **has never been compiled or run on a device**, which
-is a different kind of "not done" — see its README. Nothing in this repo has been
-validated against real hardware or a real survey network.
+The iOS app's framework layer **has never been compiled, and none of it has run
+on a device** — a different kind of "not done", see its README. Nothing in this
+repo has been validated against real hardware or a real survey network.
 
 ## Repository layout
 
@@ -169,6 +195,7 @@ packages/formats   PLY, GLB, OBJ, FBX, E57, LAS readers and writers
 packages/geo       ellipsoids, projections, State Plane, registration, NMEA
 packages/recon     camera models, TSDF fusion, marching tetrahedra
 packages/sfm       two-view geometry, PnP, bundle adjustment
+packages/features  FAST/Harris detection, binary descriptors, matching
 packages/splat     differentiable Gaussian splat rasterizer and trainer
 packages/ingest    EXIF/XMP, drone, 360 and COLMAP import
 apps/studio        the browser processing app

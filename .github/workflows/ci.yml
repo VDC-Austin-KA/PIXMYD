@@ -60,31 +60,10 @@ jobs:
           done
           exit $status
 
-  ios:
-    name: iOS app (Xcode)
-    runs-on: macos-15
-    # Only a Mac can compile the SwiftUI, ARKit, CoreLocation and Metal half of
-    # the app, so this is the job that decides whether the app actually builds.
-    # It is separate from `swift` above because macOS runners are billed at ten
-    # times the Linux rate: the cheap job catches most of it first.
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install XcodeGen
-        run: brew install xcodegen
-
-      # The .pbxproj is generated rather than committed — it is unreviewable in
-      # a diff and merges badly. project.yml is the source of truth.
-      - name: Generate the project
-        working-directory: apps/ios
-        run: xcodegen generate
-
-      - name: Build
-        working-directory: apps/ios
-        run: |
-          xcodebuild build \
-            -project PIXMYD.xcodeproj \
-            -scheme PIXMYD \
-            -destination 'generic/platform=iOS Simulator' \
-            -quiet \
-            CODE_SIGNING_ALLOWED=NO
+# The Xcode build is NOT here. Compiling the SwiftUI, ARKit, CoreLocation and
+# Metal half of the app needs a Mac, and a macos-15 job in this workflow was the
+# obvious place for it — except that Actions cannot allocate a runner of any
+# kind on this account, ubuntu included, so nothing in this file has ever
+# executed. Tying the one build that produces an installable app to that being
+# fixed was the wrong dependency. It lives in codemagic.yaml instead, whose free
+# tier includes macOS instances. See apps/ios/README.md for the install route.
