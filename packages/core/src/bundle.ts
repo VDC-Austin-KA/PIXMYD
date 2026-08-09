@@ -184,17 +184,19 @@ export interface Frame {
  * matters operationally is 4 vs everything else: only an integer-ambiguity fix is
  * centimetre work. A float solution looks fine on screen and is decimetres out.
  */
-export enum FixQuality {
-  Invalid = 0,
-  SinglePoint = 1,
-  DGPS = 2,
-  PPS = 3,
-  RtkFixed = 4,
-  RtkFloat = 5,
-  DeadReckoning = 6,
-  Manual = 7,
-  Simulation = 8,
-}
+export const FixQuality = {
+  Invalid: 0,
+  SinglePoint: 1,
+  DGPS: 2,
+  PPS: 3,
+  RtkFixed: 4,
+  RtkFloat: 5,
+  DeadReckoning: 6,
+  Manual: 7,
+  Simulation: 8,
+} as const;
+
+export type FixQuality = (typeof FixQuality)[keyof typeof FixQuality];
 
 export interface GnssFix {
   /** Seconds since the session epoch. */

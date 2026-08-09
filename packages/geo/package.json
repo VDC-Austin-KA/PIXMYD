@@ -1,0 +1,17 @@
+{
+  "name": "@pixmyd/geo",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "@pixmyd/core": "*"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./units": "./src/units.ts",
+    "./projection": "./src/projection.ts",
+    "./zones": "./src/zones.ts",
+    "./registration": "./src/registration.ts",
+    "./nmea": "./src/nmea.ts"
+  }
+}
