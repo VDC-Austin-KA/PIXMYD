@@ -165,7 +165,7 @@ final class ProjectStore: ObservableObject {
 
         for url in contents where url.pathExtension == BundleFormat.directoryExtension {
             guard !known.contains(url.lastPathComponent) else { continue }
-            if let recovered = try? CaptureWriter.recover(at: url), let recovered {
+            if let recovered = try? CaptureWriter.recover(at: url) {
                 projects.append(recovered)
             } else if let project = Self.readManifest(at: url) {
                 projects.append(project)
