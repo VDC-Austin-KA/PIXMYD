@@ -1,0 +1,15 @@
+{
+  "name": "@pixmyd/sfm",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "@pixmyd/core": "*"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./geometry": "./src/geometry.ts",
+    "./pnp": "./src/pnp.ts",
+    "./bundle-adjust": "./src/bundle-adjust.ts"
+  }
+}
