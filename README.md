@@ -171,6 +171,13 @@ apps/studio        the browser processing app
 apps/ios           the Swift capture app (uncompiled)
 ```
 
+## Ingest — `packages/ingest`
+
+EXIF and XMP parsing written from the specification, so a folder of drone
+photographs becomes a capture with initial poses: GPS position, gimbal
+orientation, focal length and sensor width. Plus 360 panorama ingest with
+cube-face splitting, and COLMAP import and export.
+
 ## Running it
 
 Requires Node 22.6 or newer — the packages are TypeScript run directly via
