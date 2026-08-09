@@ -1,0 +1,101 @@
+# Codemagic build definition — https://docs.codemagic.io/yaml/yaml-getting-started/
+#
+# This exists because compiling the iOS app needs a Mac and there is not one in
+# this project. GitHub Actions could host that, but Actions cannot allocate a
+# runner of any kind on this account, so the iOS build lives here instead and
+# does not depend on that being fixed. The Linux jobs stay in GitHub Actions.
+#
+# To connect it: sign in at codemagic.io with the GitHub account, add the
+# PIXMYD repository, and this file is picked up automatically. The free tier
+# includes macOS instances and 500 build minutes a month, which is far more
+# than this needs.
+
+workflows:
+  ios-unsigned:
+    name: iOS device build (unsigned)
+    instance_type: mac_mini_m2
+    max_build_duration: 45
+
+    environment:
+      xcode: latest
+      xcodegen: latest
+
+    triggering:
+      events:
+        - push
+        - pull_request
+      branch_patterns:
+        - pattern: '*'
+          include: true
+
+    scripts:
+      # The .pbxproj is generated rather than committed — it is unreviewable in
+      # a diff and merges badly. project.yml is the source of truth.
+      - name: Generate the Xcode project
+        working_directory: apps/ios
+        script: xcodegen generate
+
+      # The arithmetic half of the app already builds and tests on Linux in
+      # GitHub Actions. This is the half that has never been through a compiler
+      # at all: SwiftUI, ARKit, CoreLocation, Metal, Network. Expect real errors
+      # here on the first run — that is what this job is for.
+      - name: Build for a real device
+        working_directory: apps/ios
+        script: |
+          set -o pipefail
+          xcodebuild archive \
+            -project PIXMYD.xcodeproj \
+            -scheme PIXMYD \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$CM_BUILD_DIR/build/PIXMYD.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            | xcbeautify
+
+      # Run the unit tests in the iOS environment. They pass on Linux against
+      # the same sources, so a failure here means the iOS toolchain sees
+      # something the Linux one does not — worth knowing separately from a
+      # plain build failure.
+      - name: Unit tests
+        working_directory: apps/ios
+        script: |
+          set -o pipefail
+          xcodebuild test \
+            -project PIXMYD.xcodeproj \
+            -scheme PIXMYD \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcbeautify
+        ignore_failure: true
+
+      # An .ipa is a zip with the .app inside a directory called Payload. That
+      # is the whole format. Building it by hand rather than with
+      # `xcodebuild -exportArchive` is deliberate: export insists on a signing
+      # identity, and there is no paid Apple Developer account here to provide
+      # one. Sideloadly signs it on Windows with a free Apple ID instead.
+      - name: Package an unsigned .ipa
+        script: |
+          set -e
+          cd "$CM_BUILD_DIR/build"
+          mkdir -p Payload
+          cp -R PIXMYD.xcarchive/Products/Applications/PIXMYD.app Payload/
+          zip -qry PIXMYD-unsigned.ipa Payload
+          rm -rf Payload
+          ls -lh PIXMYD-unsigned.ipa
+
+    artifacts:
+      - build/*.ipa
+      - build/*.xcarchive
+      # xcodebuild writes the useful diagnostics here, and on a first build
+      # they are the point of the run.
+      - /tmp/xcodebuild_logs/*.log
+
+    publishing:
+      email:
+        recipients:
+          - keithacker33@gmail.com
+        notify:
+          success: true
+          failure: true

@@ -6,9 +6,49 @@ with no account, no subscription, and nothing uploaded anywhere.
 > **Partly compiled, never run on a device.** The arithmetic half — bundle
 > schema, TSDF fusion, meshing, format writers, NMEA parsing — is compiled and
 > tested on every push (35 tests, on Linux). The SwiftUI, ARKit, CoreLocation
-> and Metal half has only been *parsed*; a macOS CI job compiles it, and until
-> that job has run green nothing here has been through a full `swiftc`. Nothing
-> at all has run on hardware — see [Before trusting it](#before-trusting-it).
+> and Metal half has only been *parsed*; [Codemagic](../../codemagic.yaml)
+> compiles it, and until that build has run green nothing here has been through
+> a full `swiftc`. Nothing at all has run on hardware — see [Before trusting
+> it](#before-trusting-it).
+
+## Getting it onto an iPhone without a Mac
+
+The build happens on Codemagic's macOS instances and produces an **unsigned**
+`.ipa`; a free Apple ID signs it on Windows. No Mac and no $99 developer
+account are involved at any point.
+
+1. **Get the build.** Push to the repo; Codemagic picks up
+   [`codemagic.yaml`](../../codemagic.yaml) automatically. Download
+   `PIXMYD-unsigned.ipa` from the build's artifacts.
+2. **Install Apple's USB drivers.** [Apple
+   Devices](https://apps.microsoft.com/detail/9np83lwlpz9k) from the Microsoft
+   Store, or iTunes downloaded from apple.com. The Microsoft Store build of
+   iTunes does not expose the drivers a sideloader needs.
+3. **Sign and install with [Sideloadly](https://sideloadly.io/).** Plug the
+   phone in, drag the `.ipa` on, enter the Apple ID, hit Start. It registers
+   the device, generates a free provisioning profile, signs, and installs.
+4. **Trust the certificate.** Settings → General → VPN & Device Management →
+   the Apple ID → Trust. The app will not launch until this is done, and the
+   failure looks like a crash rather than a permissions problem.
+
+### What a free Apple ID costs you
+
+- **The app stops working after 7 days** and has to be re-signed. This is
+  Apple's limit on free provisioning, not something the app can avoid.
+  [AltStore](https://altstore.io/) solves it properly — its Windows companion
+  re-signs installed apps over Wi-Fi in the background, so the expiry becomes
+  invisible. Worth the extra setup if this is going to be used on site.
+- **Three sideloaded apps at a time**, and ten new app IDs per week.
+- **No entitlements that need a paid team.** The app had exactly one —
+  `com.apple.developer.networking.wifi-info` — which no code used and which
+  would have failed free signing, so it is gone.
+
+Everything the app actually does — ARKit, LiDAR depth, camera, GPS, Bluetooth
+to an RTK receiver, on-device export — works under free provisioning.
+
+A **Pro iPhone is required for LiDAR**. On a non-Pro phone the app runs and
+says depth is unavailable rather than degrading quietly, but the whole point of
+it is the depth sensor.
 
 ## Building
 
