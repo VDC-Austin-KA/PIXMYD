@@ -1,0 +1,59 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "types": [
+      "node"
+    ],
+    "paths": {
+      "@pixmyd/core": [
+        "./packages/core/src/index.ts"
+      ],
+      "@pixmyd/core/*": [
+        "./packages/core/src/*.ts"
+      ],
+      "@pixmyd/formats": [
+        "./packages/formats/src/index.ts"
+      ],
+      "@pixmyd/formats/*": [
+        "./packages/formats/src/*.ts"
+      ],
+      "@pixmyd/geo": [
+        "./packages/geo/src/index.ts"
+      ],
+      "@pixmyd/geo/*": [
+        "./packages/geo/src/*.ts"
+      ],
+      "@pixmyd/recon": [
+        "./packages/recon/src/index.ts"
+      ],
+      "@pixmyd/recon/*": [
+        "./packages/recon/src/*.ts"
+      ],
+      "@pixmyd/sfm": [
+        "./packages/sfm/src/index.ts"
+      ],
+      "@pixmyd/sfm/*": [
+        "./packages/sfm/src/*.ts"
+      ],
+      "@pixmyd/splat": [
+        "./packages/splat/src/index.ts"
+      ],
+      "@pixmyd/splat/*": [
+        "./packages/splat/src/*.ts"
+      ],
+      "@pixmyd/ingest": [
+        "./packages/ingest/src/index.ts"
+      ],
+      "@pixmyd/ingest/*": [
+        "./packages/ingest/src/*.ts"
+      ]
+    }
+  },
+  "include": [
+    "packages/*/src/**/*.ts",
+    "packages/*/test/**/*.ts",
+    "apps/studio/src/**/*.ts",
+    "apps/studio/test/**/*.ts",
+    "types/**/*.d.ts"
+  ]
+}

@@ -197,7 +197,9 @@ export async function zipSource(data: Uint8Array, name = 'capture'): Promise<Bun
 
     if (entry.method === 0) return raw;
     if (entry.method === 8) {
-      const stream = new Blob([raw]).stream().pipeThrough(
+      // Copy into a plain ArrayBuffer-backed view: a subarray of a SharedArrayBuffer
+      // is not a valid BlobPart, and TypeScript tracks that distinction.
+      const stream = new Blob([new Uint8Array(raw)]).stream().pipeThrough(
         new DecompressionStream('deflate-raw'),
       );
       return new Uint8Array(await new Response(stream).arrayBuffer());

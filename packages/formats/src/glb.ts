@@ -437,7 +437,10 @@ export function writeSplatGlb(splats: SplatCloud, options: GlbSplatOptions = {})
 
 export interface ParsedGlb {
   json: Record<string, any>;
-  bin: Uint8Array;
+  // Deliberately `ArrayBufferLike`: a subarray of the caller's buffer keeps
+  // whatever backing store they gave us, which may be a SharedArrayBuffer.
+  // Narrowing to ArrayBuffer here would force a copy of the whole binary chunk.
+  bin: Uint8Array<ArrayBufferLike>;
 }
 
 export function parseGlb(bytes: Uint8Array): ParsedGlb {
@@ -454,7 +457,7 @@ export function parseGlb(bytes: Uint8Array): ParsedGlb {
 
   let offset = 12;
   let json: Record<string, any> | null = null;
-  let bin = new Uint8Array(0);
+  let bin: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
 
   while (offset + 8 <= bytes.byteLength) {
     const chunkLength = view.getUint32(offset, true);
