@@ -1,5 +1,11 @@
 import Combine
 import Foundation
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
+#if canImport(ImageIO)
+import ImageIO
+#endif
 import simd
 
 /// Turns a captured bundle into a deliverable, entirely on the device.
@@ -156,13 +162,26 @@ final class ProcessingPipeline: ObservableObject {
             }
             guard case .pinhole(let camera) = depthRef.camera ?? manifest.cameras.first else { continue }
 
+            var color: [UInt8]?
+            var colorCamera: CameraModel.Pinhole?
+            if manifest.cameras.indices.contains(frame.camera),
+               case .pinhole(let fullRes) = manifest.cameras[frame.camera],
+               let pixels = loadColor(bundle: project.url, uri: frame.imageUri) {
+                color = pixels
+                colorCamera = fullRes
+            }
+
             volume.integrate(
                 depth: depth,
                 confidence: confidence,
                 width: depthRef.width,
                 height: depthRef.height,
                 camera: camera,
-                pose: pose
+                pose: pose,
+                color: color,
+                colorWidth: colorCamera?.width ?? 0,
+                colorHeight: colorCamera?.height ?? 0,
+                colorCamera: colorCamera
             )
             integrated += 1
 
@@ -205,21 +224,22 @@ final class ProcessingPipeline: ObservableObject {
             case .glb:
                 try Exporters.writeGlb(
                     positions: mesh.positions, normals: mesh.normals,
-                    indices: mesh.indices, to: url
+                    colors: mesh.colors, indices: mesh.indices, to: url
                 )
             case .obj:
                 try Exporters.writeObj(
                     positions: mesh.positions, normals: mesh.normals,
-                    indices: mesh.indices, to: url
+                    colors: mesh.colors, indices: mesh.indices, to: url
                 )
             default:
                 try Exporters.writeMeshPly(
                     positions: mesh.positions, normals: mesh.normals,
-                    indices: mesh.indices, to: url
+                    colors: mesh.colors, indices: mesh.indices, to: url
                 )
             }
             summary = "\(mesh.positions.count) vertices, \(mesh.indices.count / 3) triangles, "
-                + "\(quality.voxelSize * 1000) mm voxels."
+                + "\(quality.voxelSize * 1000) mm voxels"
+                + (mesh.colors == nil ? "." : ", coloured from \(integrated) frames.")
 
         case .points, .either:
             let cloud = volume.extractPoints()
@@ -276,6 +296,32 @@ final class ProcessingPipeline: ObservableObject {
         guard let data = try? Data(contentsOf: bundle.appendingPathComponent(uri)),
               data.count >= count else { return nil }
         return [UInt8](data.prefix(count))
+    }
+
+    /// Decodes the frame's JPEG to top-row-first RGBA8. Colour is fused at
+    /// full sensor resolution; the 256×192 depth map only decides visibility.
+    private static func loadColor(bundle: URL, uri: String) -> [UInt8]? {
+        #if canImport(ImageIO)
+        guard let source = CGImageSourceCreateWithURL(
+            bundle.appendingPathComponent(uri) as CFURL, nil
+        ), let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+        let width = image.width, height = image.height
+        guard width > 0, height > 0 else { return nil }
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        guard let context = CGContext(
+            data: &pixels,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return pixels
+        #else
+        return nil
+        #endif
     }
 }
 
