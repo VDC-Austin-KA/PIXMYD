@@ -102,7 +102,7 @@ final class ExportersTests: XCTestCase {
     func testMeshPlyFacesAreLengthPrefixed() throws {
         let positions: [SIMD3<Float>] = [SIMD3(0, 0, 0), SIMD3(1, 0, 0), SIMD3(0, 1, 0)]
         let file = url("mesh.ply")
-        try Exporters.writeMeshPly(positions: positions, normals: nil, indices: [0, 1, 2], to: file)
+        try Exporters.writeMeshPly(positions: positions, normals: nil, colors: nil, indices: [0, 1, 2], to: file)
 
         let bytes = try Bytes(file)
         let text = String(decoding: bytes.data, as: UTF8.self)
@@ -119,6 +119,33 @@ final class ExportersTests: XCTestCase {
         XCTAssertEqual(bytes.data.count, base + 13)
     }
 
+    func testMeshPlyVertexColours() throws {
+        let file = url("colored.ply")
+        try Exporters.writeMeshPly(
+            positions: [SIMD3(0, 0, 0), SIMD3(1, 0, 0), SIMD3(0, 1, 0)],
+            normals: nil,
+            colors: [SIMD3(10, 20, 30), SIMD3(40, 50, 60), SIMD3(70, 80, 90)],
+            indices: [0, 1, 2],
+            to: file
+        )
+
+        let bytes = try Bytes(file)
+        let text = String(decoding: bytes.data, as: UTF8.self)
+        XCTAssertTrue(text.contains("property uchar red"))
+
+        let headerEnd = try XCTUnwrap(text.range(of: "end_header\n"))
+        let headerLength = text.distance(from: text.startIndex, to: headerEnd.upperBound)
+        // Three floats plus three uchars per vertex, then one 1-byte-length +
+        // 3-uint32 face.
+        let stride = 3 * 4 + 3
+        XCTAssertEqual(bytes.u8(headerLength + 12), 10)
+        XCTAssertEqual(bytes.u8(headerLength + 13), 20)
+        XCTAssertEqual(bytes.u8(headerLength + 14), 30)
+        XCTAssertEqual(bytes.u8(headerLength + stride + 12), 40)
+        XCTAssertEqual(bytes.u8(headerLength + stride + 13), 50)
+        XCTAssertEqual(bytes.data.count, headerLength + 3 * stride + 13)
+    }
+
     // MARK: - OBJ
 
     func testObjIndicesAreOneBased() throws {
@@ -126,6 +153,7 @@ final class ExportersTests: XCTestCase {
         try Exporters.writeObj(
             positions: [SIMD3(0, 0, 0), SIMD3(1, 0, 0), SIMD3(0, 1, 0)],
             normals: nil,
+            colors: nil,
             indices: [0, 1, 2],
             to: file
         )
@@ -141,6 +169,7 @@ final class ExportersTests: XCTestCase {
         try Exporters.writeObj(
             positions: [SIMD3(0, 0, 0), SIMD3(1, 0, 0), SIMD3(0, 1, 0)],
             normals: [SIMD3(0, 0, 1), SIMD3(0, 0, 1), SIMD3(0, 0, 1)],
+            colors: nil,
             indices: [0, 1, 2],
             to: file
         )
@@ -151,6 +180,21 @@ final class ExportersTests: XCTestCase {
         XCTAssertEqual(text.components(separatedBy: "\nvn ").count - 1, 3)
     }
 
+    func testObjVertexColours() throws {
+        let file = url("colored.obj")
+        try Exporters.writeObj(
+            positions: [SIMD3(0, 0, 0)],
+            normals: nil,
+            colors: [SIMD3(255, 0, 0)],
+            indices: [],
+            to: file
+        )
+        let text = try String(contentsOf: file, encoding: .utf8)
+        // OBJ has no standard for vertex colour; the "v x y z r g b" extension
+        // is what MeshLab and CloudCompare read, with channels in 0..1.
+        XCTAssertTrue(text.contains("v 0.000000 0.000000 0.000000 1.000000 0.000000 0.000000\n"))
+    }
+
     // MARK: - GLB
 
     func testGlbContainerStructure() throws {
@@ -158,6 +202,7 @@ final class ExportersTests: XCTestCase {
         try Exporters.writeGlb(
             positions: [SIMD3(0, 0, 0), SIMD3(1, 0, 0), SIMD3(0, 1, 0)],
             normals: nil,
+            colors: nil,
             indices: [0, 1, 2],
             to: file
         )
@@ -195,6 +240,47 @@ final class ExportersTests: XCTestCase {
         let positionAccessor = try XCTUnwrap(accessors.first { $0["type"] as? String == "VEC3" })
         XCTAssertEqual(positionAccessor["min"] as? [Double], [0, 0, 0])
         XCTAssertEqual(positionAccessor["max"] as? [Double], [1, 1, 0])
+    }
+
+    func testGlbVertexColours() throws {
+        let file = url("colored.glb")
+        try Exporters.writeGlb(
+            positions: [SIMD3(0, 0, 0), SIMD3(1, 0, 0), SIMD3(0, 1, 0)],
+            normals: nil,
+            colors: [SIMD3(255, 0, 0), SIMD3(0, 255, 0), SIMD3(0, 0, 255)],
+            indices: [0, 1, 2],
+            to: file
+        )
+
+        let bytes = try Bytes(file)
+        let jsonLength = Int(bytes.u32(12))
+        let json = try JSONSerialization.jsonObject(
+            with: bytes.data.subdata(in: 20..<(20 + jsonLength))
+        ) as? [String: Any]
+        let gltf = try XCTUnwrap(json)
+        let mesh = try XCTUnwrap((gltf["meshes"] as? [[String: Any]])?.first)
+        let primitive = try XCTUnwrap((mesh["primitives"] as? [[String: Any]])?.first)
+        let attributes = try XCTUnwrap(primitive["attributes"] as? [String: Any])
+
+        // COLOR_0 is what viewers render vertex colour from; without it the
+        // GLB is geometry-only no matter what the fusion computed.
+        XCTAssertEqual(attributes["COLOR_0"] as? Int, 1)
+
+        let accessors = try XCTUnwrap(gltf["accessors"] as? [[String: Any]])
+        let colorAccessor = try XCTUnwrap(accessors.first { $0["type"] as? String == "VEC3" && $0["componentType"] as? Int == 5121 })
+        XCTAssertEqual(colorAccessor["count"] as? Int, 3)
+        // UNSIGNED_BYTE without normalized renders as raw 0..255 integers and
+        // the coloured mesh looks black in every viewer.
+        XCTAssertEqual(colorAccessor["normalized"] as? Bool, true)
+
+        // Binary chunk holds positions (12 bytes each) then colours (3 each).
+        let binData = 20 + jsonLength + 8
+        XCTAssertEqual(bytes.u8(binData + 36), 255)
+        XCTAssertEqual(bytes.u8(binData + 37), 0)
+        XCTAssertEqual(bytes.u8(binData + 38), 0)
+        XCTAssertEqual(bytes.u8(binData + 39), 0)
+        XCTAssertEqual(bytes.u8(binData + 40), 255)
+        XCTAssertEqual(bytes.u8(binData + 41), 0)
     }
 
     // MARK: - LAS
