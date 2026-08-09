@@ -141,7 +141,12 @@ final class NmeaAssembler {
     func flush() -> GnssFix? {
         guard let gga = pendingGga else { return nil }
         pendingGga = nil
-        let gst = pendingGst
+        // The epoch check applies here too. A GST left over from a *different*
+        // epoch describes a different position, and attaching its sigmas to
+        // this fix would report an accuracy that was never measured for it —
+        // the precise thing the pairing tolerance exists to prevent. Dropping
+        // it leaves the fix with no accuracy, which is the honest answer.
+        let gst = sameEpoch(gga.utcSeconds, pendingGst?.utcSeconds) ? pendingGst : nil
         pendingGst = nil
         return build(gga, gst)
     }

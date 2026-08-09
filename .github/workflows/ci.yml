@@ -32,3 +32,59 @@ jobs:
 
       - name: Build the studio
         run: npm --workspace @pixmyd/studio run build
+
+  swift:
+    name: iOS core (Linux)
+    runs-on: ubuntu-latest
+    # The reconstruction and export code in the iOS app is pure arithmetic, and
+    # it is where a silent bug ruins a survey rather than crashing. apps/ios's
+    # Package.swift compiles exactly those files — with a small `simd` shim
+    # standing in for Apple's — so they are built and tested on every push
+    # instead of only when somebody runs the app on a phone.
+    container: swift:6.0-noble
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test
+        working-directory: apps/ios
+        run: swift test
+
+      # Nothing else in the app can be compiled here, but it can all be parsed,
+      # which catches the syntax errors that would otherwise wait for a Mac.
+      - name: Parse the rest of the app
+        working-directory: apps/ios
+        run: |
+          status=0
+          for file in $(find PIXMYD -name '*.swift'); do
+            if ! swift-frontend -parse "$file"; then status=1; fi
+          done
+          exit $status
+
+  ios:
+    name: iOS app (Xcode)
+    runs-on: macos-15
+    # Only a Mac can compile the SwiftUI, ARKit, CoreLocation and Metal half of
+    # the app, so this is the job that decides whether the app actually builds.
+    # It is separate from `swift` above because macOS runners are billed at ten
+    # times the Linux rate: the cheap job catches most of it first.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      # The .pbxproj is generated rather than committed — it is unreviewable in
+      # a diff and merges badly. project.yml is the source of truth.
+      - name: Generate the project
+        working-directory: apps/ios
+        run: xcodegen generate
+
+      - name: Build
+        working-directory: apps/ios
+        run: |
+          xcodebuild build \
+            -project PIXMYD.xcodeproj \
+            -scheme PIXMYD \
+            -destination 'generic/platform=iOS Simulator' \
+            -quiet \
+            CODE_SIGNING_ALLOWED=NO

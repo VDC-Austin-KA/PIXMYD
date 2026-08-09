@@ -3,11 +3,12 @@
 The capture app. ARKit + LiDAR, RTK GNSS, on-device processing, and export —
 with no account, no subscription, and nothing uploaded anywhere.
 
-> **This source has not been compiled.** It was written on Linux, where no Swift
-> toolchain or iOS SDK exists, so it has never been through `swiftc`. Treat the
-> first build as a real step with real errors to fix, not a formality. Nothing
-> here has run on a device either — see [Before trusting
-> it](#before-trusting-it).
+> **Partly compiled, never run on a device.** The arithmetic half — bundle
+> schema, TSDF fusion, meshing, format writers, NMEA parsing — is compiled and
+> tested on every push (35 tests, on Linux). The SwiftUI, ARKit, CoreLocation
+> and Metal half has only been *parsed*; a macOS CI job compiles it, and until
+> that job has run green nothing here has been through a full `swiftc`. Nothing
+> at all has run on hardware — see [Before trusting it](#before-trusting-it).
 
 ## Building
 
@@ -25,6 +26,27 @@ the source of truth.
 Requires iOS 17, and a device — ARKit world tracking does not run in the
 simulator. LiDAR needs a Pro iPhone or an iPad Pro; the app runs without it and
 says so rather than degrading quietly.
+
+### Testing without a Mac
+
+The files whose only imports are Foundation and `simd` build and test on Linux:
+
+```sh
+cd apps/ios
+swift test
+```
+
+[`Package.swift`](Package.swift) compiles that subset against a small stand-in
+for Apple's `simd` module ([`Compat/simd`](Compat/simd/Simd.swift)) and points
+at the same `PIXMYDTests` directory the Xcode unit-test bundle uses, so one set
+of tests serves both. It is deliberately a subset: adding a UIKit or ARKit
+import to one of those files breaks the Linux build, which is the point.
+
+This is not a substitute for building the app — it cannot see a single view or
+the AR session. It is how the code that silently produces a wrong measurement,
+rather than crashing, gets checked on every push. Writing these tests found one
+such bug immediately: `NmeaAssembler.flush` paired a leftover GST with a GGA
+from a *different* epoch, stamping one position's accuracy onto another.
 
 ## Why an app at all
 
@@ -125,7 +147,10 @@ one from the studio are interchangeable — if they drift, that stops being true
 
 Nothing here has run on hardware. In rough order of what would bite first:
 
-1. **It has not been compiled.** Expect real errors on the first build.
+1. **The UI and framework layer has not been compiled.** The arithmetic is
+   tested; everything that imports SwiftUI, ARKit, CoreLocation, Metal or
+   Network has only been parsed. Expect real errors on the first Xcode build,
+   particularly from `SWIFT_STRICT_CONCURRENCY: complete`.
 2. **Frame-selection thresholds are derived, not measured.** The geometry is
    sound; whether 90% overlap at 2 m gives good reconstructions on a real
    jobsite is an empirical question nobody has answered yet.
