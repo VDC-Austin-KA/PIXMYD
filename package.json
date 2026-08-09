@@ -15,13 +15,14 @@
   "scripts": {
     "test": "node --test --experimental-strip-types \"packages/*/test/*.test.ts\" \"apps/*/test/*.test.ts\"",
     "test:watch": "node --test --watch --experimental-strip-types \"packages/*/test/*.test.ts\" \"apps/*/test/*.test.ts\"",
-    "typecheck": "tsc --build",
+    "typecheck": "tsc --noEmit",
     "dev": "npm --workspace @pixmyd/studio run dev",
     "build": "npm --workspace @pixmyd/studio run build"
   },
   "devDependencies": {
     "fflate": "^0.8.3",
     "three": "^0.185.1",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "@types/node": "^22.0.0"
   }
 }

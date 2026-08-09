@@ -440,7 +440,11 @@ function renderRcs(): void {
 // ---------------------------------------------------------------------------
 
 function download(file: ExportFile): void {
-  const blob = new Blob([file.bytes as BlobPart], { type: file.mimeType });
+  // Blob wants a view backed by a plain ArrayBuffer. Typed arrays in TS 5.7+
+  // carry their backing-store type, and an exporter's output may be backed by
+  // anything, so this narrows explicitly rather than casting the whole view.
+  const bytes = new Uint8Array(file.bytes);
+  const blob = new Blob([bytes], { type: file.mimeType });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;

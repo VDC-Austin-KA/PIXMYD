@@ -4,3 +4,9 @@ dist/
 .DS_Store
 scratch/
 apps/studio/dist/
+
+# SwiftPM build products, and the Xcode project XcodeGen generates from
+# project.yml — the spec is the source of truth, not the .pbxproj.
+.build/
+apps/ios/PIXMYD.xcodeproj/
+apps/ios/.swiftpm/
