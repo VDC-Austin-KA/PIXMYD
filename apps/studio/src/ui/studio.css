@@ -1,0 +1,416 @@
+/*
+ * Studio styling.
+ *
+ * The same design language as the phone app: an instrument, not a product.
+ * Flat surfaces, no gradients, no shadows, no rounded-everything. Status colour
+ * is reserved for tolerance semantics and is always paired with a word, because
+ * red/green is the most common colour deficiency and this palette leans on it.
+ *
+ * Sized for a laptop in a site trailer as well as a desk — which mostly means
+ * bigger targets and higher contrast than a desktop app would otherwise use.
+ */
+
+:root {
+  --bg: #0a0b0d;
+  --surface: #16181b;
+  --surface-raised: #22252a;
+  --hairline: #34383f;
+
+  --text: #f2f4f6;
+  --text-secondary: #a8adb5;
+  --text-tertiary: #71767e;
+
+  --accent: #4099f2;
+  --good: #4dc76f;
+  --caution: #f2b333;
+  --bad: #eb5952;
+
+  --gutter: 1rem;
+  --radius: 10px;
+  --tap: 44px;
+
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.5;
+  /* Room for a phone's home indicator when this is opened on a device. */
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* --- masthead --- */
+
+.masthead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--gutter);
+  padding: var(--gutter) calc(var(--gutter) * 1.5);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.masthead-title { display: flex; align-items: baseline; gap: 0.5rem; }
+
+.wordmark {
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  font-size: 1.05rem;
+}
+
+.wordmark-sub {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.masthead-note {
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+/* --- layout --- */
+
+main {
+  max-width: 62rem;
+  margin: 0 auto;
+  padding: calc(var(--gutter) * 1.5);
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--gutter) * 1.25);
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  padding: calc(var(--gutter) * 1.25);
+}
+
+.panel-title {
+  margin: 0 0 0.75rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.subhead {
+  margin: calc(var(--gutter) * 1.5) 0 0.6rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.prose {
+  margin: 0 0 var(--gutter);
+  color: var(--text-secondary);
+  max-width: 60ch;
+}
+
+.prose code {
+  font-family: var(--mono);
+  font-size: 0.9em;
+  background: var(--surface-raised);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+/* --- controls --- */
+
+.button {
+  appearance: none;
+  min-height: var(--tap);
+  padding: 0 1.1rem;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.button:hover { border-color: var(--text-tertiary); }
+
+.button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.button-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #06101c;
+}
+
+.button-primary:hover { filter: brightness(1.08); }
+
+.button-quiet {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.field { border: 0; padding: 0; margin: 0 0 var(--gutter); }
+
+.field-label {
+  padding: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.field-note {
+  display: block;
+  margin: 0.4rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  max-width: 60ch;
+}
+
+.segmented {
+  display: inline-flex;
+  margin-top: 0.5rem;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.segmented button {
+  appearance: none;
+  min-height: var(--tap);
+  padding: 0 1.1rem;
+  border: 0;
+  border-right: 1px solid var(--hairline);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.segmented button:last-child { border-right: 0; }
+
+.segmented button[aria-checked='true'] {
+  background: var(--accent);
+  color: #06101c;
+}
+
+.checkbox {
+  display: flex;
+  gap: 0.7rem;
+  align-items: flex-start;
+  margin-bottom: var(--gutter);
+  cursor: pointer;
+}
+
+.checkbox input {
+  margin-top: 0.3rem;
+  width: 1.1rem;
+  height: 1.1rem;
+  accent-color: var(--accent);
+}
+
+.estimate {
+  color: var(--text-tertiary);
+  font-family: var(--mono);
+  font-size: 0.82rem;
+}
+
+/* --- readouts --- */
+
+.readout-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: var(--gutter);
+}
+
+.readout-label {
+  display: block;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.readout-value {
+  display: block;
+  margin-top: 0.15rem;
+  font-family: var(--mono);
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.readout-value .unit {
+  font-size: 0.78rem;
+  font-weight: 400;
+  color: var(--text-secondary);
+  margin-left: 0.2em;
+}
+
+.tone-good { color: var(--good); }
+.tone-caution { color: var(--caution); }
+.tone-bad { color: var(--bad); }
+
+.numeric { font-family: var(--mono); }
+
+/* --- notices --- */
+
+.notice {
+  margin-top: var(--gutter);
+  padding: 0.85rem 1rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--caution);
+  background: color-mix(in srgb, var(--caution) 12%, transparent);
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+.notice-error {
+  border-color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
+}
+
+.notice strong { display: block; margin-bottom: 0.25rem; }
+
+/* --- progress --- */
+
+.progress { margin-top: var(--gutter); }
+
+.progress-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.4rem;
+}
+
+.progress-track {
+  height: 6px;
+  background: var(--surface-raised);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 120ms linear;
+}
+
+/* --- export --- */
+
+.export-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 0.75rem;
+}
+
+.export-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  align-items: flex-start;
+  min-height: var(--tap);
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.export-card:hover:not(:disabled) { border-color: var(--accent); }
+
+.export-card:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.export-name { font-weight: 700; letter-spacing: 0.03em; }
+
+.export-note {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+/* --- disclosure --- */
+
+.disclosure {
+  margin-top: var(--gutter);
+  border-top: 1px solid var(--hairline);
+  padding-top: 0.75rem;
+}
+
+.disclosure summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.disclosure-body {
+  margin-top: 0.75rem;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  max-width: 62ch;
+}
+
+.disclosure-body ol { padding-left: 1.2rem; }
+
+.disclosure-body code {
+  font-family: var(--mono);
+  font-size: 0.85em;
+  background: var(--surface-raised);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  word-break: break-all;
+}
+
+/* --- footer --- */
+
+.footer {
+  max-width: 62rem;
+  margin: 0 auto;
+  padding: var(--gutter) calc(var(--gutter) * 1.5) calc(var(--gutter) * 2);
+  color: var(--text-tertiary);
+  font-size: 0.85rem;
+}
+
+.footer a { color: var(--text-secondary); }
+
+/* Vestibular safety is not a preference. */
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}

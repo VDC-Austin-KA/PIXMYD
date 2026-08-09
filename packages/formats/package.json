@@ -13,6 +13,7 @@
     "./glb": "./src/glb.ts",
     "./fbx": "./src/fbx.ts",
     "./e57": "./src/e57.ts",
-    "./las": "./src/las.ts"
+    "./las": "./src/las.ts",
+    "./export": "./src/export.ts"
   }
 }

@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <title>PIXMYD Studio</title>
+    <meta
+      name="description"
+      content="Process reality capture in the browser. Nothing is uploaded."
+    />
+    <link rel="stylesheet" href="/src/ui/studio.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <div class="masthead-title">
+        <span class="wordmark">PIXMYD</span>
+        <span class="wordmark-sub">Studio</span>
+      </div>
+      <div class="masthead-note" id="privacy-note">
+        Runs entirely in this browser. Nothing is uploaded.
+      </div>
+    </header>
+
+    <main id="app">
+      <!-- Step 1: load -->
+      <section class="panel" id="load-panel">
+        <h2 class="panel-title">Capture</h2>
+        <p class="prose">
+          Open a <code>.pixmyd</code> capture folder, or a zip of one. Files are read
+          from disk as they are needed and never leave this machine.
+        </p>
+        <div class="row">
+          <button class="button button-primary" id="pick-directory">Open folder</button>
+          <button class="button" id="pick-zip">Open zip</button>
+        </div>
+        <input type="file" id="directory-input" webkitdirectory multiple hidden />
+        <input type="file" id="zip-input" accept=".zip" hidden />
+        <div class="notice notice-error" id="load-error" hidden></div>
+      </section>
+
+      <!-- Step 2: inspect -->
+      <section class="panel" id="capture-panel" hidden>
+        <h2 class="panel-title">Loaded</h2>
+        <div class="readout-grid" id="capture-readouts"></div>
+        <div class="notice" id="capture-warning" hidden></div>
+      </section>
+
+      <!-- Step 3: process -->
+      <section class="panel" id="process-panel" hidden>
+        <h2 class="panel-title">Process</h2>
+
+        <fieldset class="field">
+          <legend class="field-label">Detail</legend>
+          <div class="segmented" id="detail-choice" role="radiogroup" aria-label="Detail"></div>
+          <p class="field-note" id="detail-note"></p>
+        </fieldset>
+
+        <label class="checkbox">
+          <input type="checkbox" id="want-mesh" checked />
+          <span>
+            Build a surface mesh
+            <span class="field-note">Roughly 60% more time. Without it you get a point cloud.</span>
+          </span>
+        </label>
+
+        <div class="row">
+          <button class="button button-primary" id="run">Process</button>
+          <button class="button button-quiet" id="cancel" hidden>Cancel</button>
+          <span class="estimate" id="estimate"></span>
+        </div>
+
+        <div class="progress" id="progress" hidden>
+          <div class="progress-head">
+            <span id="progress-stage">Working</span>
+            <span class="numeric" id="progress-percent">0%</span>
+          </div>
+          <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+        </div>
+
+        <div class="notice notice-error" id="process-error" hidden></div>
+      </section>
+
+      <!-- Step 4: result -->
+      <section class="panel" id="result-panel" hidden>
+        <h2 class="panel-title">Result</h2>
+        <div class="readout-grid" id="result-readouts"></div>
+        <div class="notice" id="result-warning" hidden></div>
+
+        <h3 class="subhead">Export</h3>
+        <div class="export-grid" id="export-grid"></div>
+
+        <details class="disclosure" id="rcs-disclosure">
+          <summary>Getting to RCS or RCP</summary>
+          <div class="disclosure-body" id="rcs-body"></div>
+        </details>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>
+        PIXMYD is free and open source.
+        <a href="https://github.com/VDC-Austin-KA/PIXMYD">Source</a>.
+      </p>
+    </footer>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

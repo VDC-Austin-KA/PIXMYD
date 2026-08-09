@@ -10,6 +10,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./camera": "./src/camera.ts",
-    "./tsdf": "./src/tsdf.ts"
+    "./tsdf": "./src/tsdf.ts",
+    "./marching": "./src/marching.ts"
   }
 }

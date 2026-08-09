@@ -48,7 +48,7 @@ is parsed back by three.js's loaders in the test suite.
 ## What works today
 
 Everything listed here is implemented and covered by the test suite
-(`npm test`, 168 tests, no network access required).
+(`npm test`, 178 tests, no network access required).
 
 ### Export formats — `packages/formats`
 
@@ -129,6 +129,15 @@ This app exists because iPhone LiDAR is not reachable from a web page — not
 through WebXR, not `getUserMedia`, not anything in flight. Everything else in
 PIXMYD is deliberately a web toolchain.
 
+### Studio web app — `apps/studio`
+
+Open a `.pixmyd` capture folder or a zip of one, fuse it, and export. Runs
+entirely in the browser — nothing is uploaded, and there is no server.
+
+`npm run dev` to start it. An end-to-end test drives the whole path with a
+synthetic capture: bundle reader, fusion, meshing, and every export format read
+back by an independent parser.
+
 ### Capture bundle — `packages/core`
 
 The data model everything normalizes into: iPhone LiDAR, Quest 3 passthrough, a
@@ -143,11 +152,13 @@ Stated plainly so nobody plans around vapour:
   WebGPU trainer that produces the splats is not written.
 - **Structure-from-motion.** Nothing yet solves poses from images alone, so
   photogrammetry-only capture (drone, 360) has no pose source without metadata.
-- **The iOS capture app.** ARKit/LiDAR/RTK capture is designed against the
-  bundle schema but not written.
-- **The studio web app.** No UI yet.
+  This is the gap that currently keeps the drone and 360 paths theoretical.
+- **A 3D viewer in the studio.** You can process and export, but not yet look
+  at the result in the browser before you do.
 
-None of the above has been run against real hardware or a real survey network.
+The iOS app is written but **has never been compiled or run on a device**, which
+is a different kind of "not done" — see its README. Nothing in this repo has been
+validated against real hardware or a real survey network.
 
 ## Repository layout
 
@@ -156,6 +167,7 @@ packages/core      math, binary IO, the capture bundle schema
 packages/formats   PLY, GLB, OBJ, FBX, E57, LAS readers and writers
 packages/geo       ellipsoids, projections, State Plane, registration, NMEA
 packages/recon     camera models, TSDF fusion, marching tetrahedra
+apps/studio        the browser processing app
 apps/ios           the Swift capture app (uncompiled)
 ```
 
