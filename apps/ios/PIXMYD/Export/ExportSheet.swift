@@ -1,0 +1,224 @@
+import SwiftUI
+import UniformTypeIdentifiers
+
+/// Export a captured project.
+///
+/// The sheet processes on device — fuse the depth frames, extract a surface or
+/// a point cloud, write the file — and reports progress honestly, including how
+/// long it is likely to take. Nothing is uploaded anywhere.
+struct ExportSheet: View {
+    let project: CaptureProject
+
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var processor = ProcessingPipeline()
+    @State private var format: ExportFormat = .glb
+    @State private var quality: ProcessingPipeline.Quality = .balanced
+    @State private var exportedURL: URL?
+    @State private var showShare = false
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: Theme.Metrics.gutter) {
+                    formatPicker
+
+                    if format == .rcs {
+                        rcsBridge
+                    } else {
+                        qualityPicker
+                        progress
+                    }
+                }
+                .padding(Theme.Metrics.gutter)
+            }
+            .background(Theme.Palette.background)
+            .navigationTitle("Export")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") {
+                        processor.cancel()
+                        dismiss()
+                    }
+                }
+            }
+            .sheet(isPresented: $showShare) {
+                if let exportedURL {
+                    ShareSheet(items: [exportedURL])
+                }
+            }
+        }
+    }
+
+    private var formatPicker: some View {
+        Panel(title: "Format") {
+            VStack(spacing: 0) {
+                ForEach(ExportFormat.allCases) { candidate in
+                    Button {
+                        format = candidate
+                    } label: {
+                        HStack(alignment: .top, spacing: Theme.Metrics.gutterTight) {
+                            Image(systemName: format == candidate
+                                  ? "largecircle.fill.circle" : "circle")
+                                .foregroundStyle(format == candidate
+                                                 ? Theme.Palette.accent : Theme.Palette.textTertiary)
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 6) {
+                                    Text(candidate.title)
+                                        .font(Theme.Typeface.label(15, weight: .semibold))
+                                        .foregroundStyle(Theme.Palette.text)
+                                    if !candidate.isAvailable {
+                                        StatusChip(text: "Via E57", tone: .caution)
+                                    }
+                                }
+                                Text(candidate.detail)
+                                    .font(Theme.Typeface.caption)
+                                    .foregroundStyle(Theme.Palette.textSecondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer()
+                        }
+                        .padding(.vertical, 9)
+                    }
+                    .buttonStyle(.plain)
+                    if candidate != ExportFormat.allCases.last {
+                        Divider().overlay(Theme.Palette.hairline)
+                    }
+                }
+            }
+        }
+    }
+
+    private var qualityPicker: some View {
+        Panel(title: "Detail") {
+            VStack(alignment: .leading, spacing: Theme.Metrics.gutterTight) {
+                Picker("Detail", selection: $quality) {
+                    ForEach(ProcessingPipeline.Quality.allCases) { level in
+                        Text(level.label).tag(level)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Text(quality.detail)
+                    .font(Theme.Typeface.caption)
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                // An honest estimate, derived from the frame count. Users make
+                // a different choice when they know it is eight minutes.
+                Text(estimate)
+                    .font(Theme.Typeface.numeric(12))
+                    .foregroundStyle(Theme.Palette.textTertiary)
+            }
+        }
+    }
+
+    private var progress: some View {
+        VStack(spacing: Theme.Metrics.gutter) {
+            if case .running(let stage, let fraction) = processor.state {
+                Panel {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Text(stage)
+                                .font(Theme.Typeface.label(14, weight: .medium))
+                                .foregroundStyle(Theme.Palette.text)
+                            Spacer()
+                            Text("\(Int(fraction * 100))%")
+                                .font(Theme.Typeface.numeric(14))
+                                .foregroundStyle(Theme.Palette.textSecondary)
+                        }
+                        ProgressView(value: fraction)
+                            .tint(Theme.Palette.accent)
+                    }
+                }
+                FieldButton(title: "Cancel", role: .destructive) { processor.cancel() }
+            } else if case .failed(let message) = processor.state {
+                Panel {
+                    Label {
+                        Text(message)
+                            .font(Theme.Typeface.caption)
+                            .foregroundStyle(Theme.Palette.textSecondary)
+                    } icon: {
+                        Image(systemName: "xmark.octagon.fill")
+                            .foregroundStyle(Theme.Palette.bad)
+                    }
+                }
+                FieldButton(title: "Try again", systemImage: "arrow.clockwise", role: .primary) {
+                    run()
+                }
+            } else if case .finished(let url, let summary) = processor.state {
+                Panel(title: "Done") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(summary)
+                            .font(Theme.Typeface.caption)
+                            .foregroundStyle(Theme.Palette.textSecondary)
+                    }
+                }
+                FieldButton(title: "Share", systemImage: "square.and.arrow.up", role: .primary) {
+                    exportedURL = url
+                    showShare = true
+                }
+            } else {
+                FieldButton(title: "Process and export", systemImage: "gearshape.2", role: .primary) {
+                    run()
+                }
+            }
+        }
+    }
+
+    private var rcsBridge: some View {
+        VStack(spacing: Theme.Metrics.gutter) {
+            Panel(title: "Why not directly") {
+                Text(RcsBridge.explanation)
+                    .font(Theme.Typeface.caption)
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            ForEach(RcsBridge.routes, id: \.name) { route in
+                Panel(title: route.name) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Needs \(route.requires)")
+                            .font(Theme.Typeface.caption)
+                            .foregroundStyle(Theme.Palette.textTertiary)
+                        ForEach(Array(route.steps.enumerated()), id: \.offset) { index, step in
+                            HStack(alignment: .top, spacing: 8) {
+                                Text("\(index + 1).")
+                                    .font(Theme.Typeface.numeric(12))
+                                    .foregroundStyle(Theme.Palette.textTertiary)
+                                Text(step)
+                                    .font(Theme.Typeface.caption)
+                                    .foregroundStyle(Theme.Palette.textSecondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                }
+            }
+
+            FieldButton(title: "Export E57 instead", systemImage: "arrow.right", role: .primary) {
+                format = .e57
+            }
+        }
+    }
+
+    private var estimate: String {
+        let seconds = processor.estimatedSeconds(frameCount: project.frameCount, quality: quality)
+        if seconds < 60 { return "Roughly \(Int(seconds)) s on this device." }
+        return String(format: "Roughly %.0f min on this device.", seconds / 60)
+    }
+
+    private func run() {
+        processor.run(project: project, format: format, quality: quality)
+    }
+}
+
+struct ShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}

@@ -1,0 +1,223 @@
+import Foundation
+import Network
+
+/// A saved RTK receiver configuration.
+struct RtkProfile: Identifiable, Codable, Equatable, Hashable {
+    var id = UUID()
+    var name: String = "New profile"
+
+    // NTRIP caster
+    var host: String = ""
+    var port: Int = 2101
+    var mountPoint: String = ""
+    var username: String = ""
+    var password: String = ""
+    /// Send the receiver's own position to the caster, which most VRS networks
+    /// require in order to generate a correction stream for your location.
+    var sendPositionToCaster = true
+
+    /// Antenna phase centre relative to the camera, device body axes, metres.
+    /// Positive Y is up the pole.
+    var leverArmX: Double = 0
+    var leverArmY: Double = 0
+    var leverArmZ: Double = 0
+
+    /// Antenna height measured from the ground mark to the phase centre. Kept
+    /// separate from the lever arm because a surveyor measures and records it
+    /// separately, and conflating them is how the two get added twice.
+    var antennaHeight: Double = 0
+
+    var isComplete: Bool {
+        !host.isEmpty && !mountPoint.isEmpty
+    }
+}
+
+/// Minimal NTRIP v1 client.
+///
+/// NTRIP is HTTP-shaped but not HTTP: the caster replies `ICY 200 OK` and then
+/// streams RTCM forever on the same socket. `URLSession` cannot express that,
+/// so this speaks the protocol directly over `NWConnection`.
+///
+/// The app never interprets the RTCM. Corrections go straight to the receiver,
+/// which is the only thing that can apply them — the phone is a pipe, and
+/// pretending otherwise would mean reimplementing a GNSS engine.
+final class NtripClient: @unchecked Sendable {
+
+    enum State: Equatable {
+        case idle
+        case connecting
+        case streaming(bytesReceived: Int)
+        case failed(String)
+
+        var label: String {
+            switch self {
+            case .idle: "Not connected"
+            case .connecting: "Connecting"
+            case .streaming(let bytes):
+                "Streaming — \(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .binary))"
+            case .failed(let reason): reason
+            }
+        }
+
+        var isHealthy: Bool {
+            if case .streaming = self { return true }
+            return false
+        }
+    }
+
+    var onCorrection: ((Data) -> Void)?
+    var onStateChange: ((State) -> Void)?
+
+    private let profile: RtkProfile
+    private var connection: NWConnection?
+    private let queue = DispatchQueue(label: "com.pixmyd.ntrip")
+    private var bytesReceived = 0
+    private var headerConsumed = false
+    private var positionTimer: DispatchSourceTimer?
+
+    /// The most recent GGA to report upstream, set by the GNSS manager.
+    var latestGga: String?
+
+    init(profile: RtkProfile) {
+        self.profile = profile
+    }
+
+    func start() {
+        guard profile.isComplete else {
+            onStateChange?(.failed("Profile is missing a host or mount point."))
+            return
+        }
+        setState(.connecting)
+
+        let endpoint = NWEndpoint.hostPort(
+            host: .init(profile.host),
+            port: .init(rawValue: UInt16(profile.port)) ?? 2101
+        )
+        let connection = NWConnection(to: endpoint, using: .tcp)
+        self.connection = connection
+
+        connection.stateUpdateHandler = { [weak self] state in
+            guard let self else { return }
+            switch state {
+            case .ready:
+                self.sendRequest()
+                self.receive()
+            case .failed(let error):
+                self.setState(.failed(error.localizedDescription))
+            case .cancelled:
+                self.setState(.idle)
+            default:
+                break
+            }
+        }
+        connection.start(queue: queue)
+    }
+
+    func stop() {
+        positionTimer?.cancel()
+        positionTimer = nil
+        connection?.cancel()
+        connection = nil
+        headerConsumed = false
+        bytesReceived = 0
+        setState(.idle)
+    }
+
+    // MARK: - Protocol
+
+    private func sendRequest() {
+        let credentials = "\(profile.username):\(profile.password)"
+        let encoded = Data(credentials.utf8).base64EncodedString()
+        let request = """
+        GET /\(profile.mountPoint) HTTP/1.0\r
+        User-Agent: NTRIP PIXMYD/\(Bundle.main.shortVersion)\r
+        Accept: */*\r
+        Authorization: Basic \(encoded)\r
+        Connection: close\r
+        \r
+
+        """
+        connection?.send(content: Data(request.utf8), completion: .contentProcessed { [weak self] error in
+            if let error {
+                self?.setState(.failed(error.localizedDescription))
+            }
+        })
+    }
+
+    private func receive() {
+        connection?.receive(minimumIncompleteLength: 1, maximumLength: 8192) {
+            [weak self] data, _, isComplete, error in
+            guard let self else { return }
+
+            if let error {
+                self.setState(.failed(error.localizedDescription))
+                return
+            }
+
+            if var data, !data.isEmpty {
+                if !self.headerConsumed {
+                    // The caster's reply header ends at the first blank line.
+                    // Everything after it is RTCM and must not be swallowed.
+                    if let range = data.range(of: Data("\r\n\r\n".utf8)) {
+                        let header = String(decoding: data[..<range.lowerBound], as: UTF8.self)
+                        guard header.contains("200") else {
+                            self.setState(.failed(Self.describe(header)))
+                            return
+                        }
+                        self.headerConsumed = true
+                        data = data[range.upperBound...]
+                        self.startPositionReports()
+                    } else {
+                        // Header split across reads; wait for the rest.
+                        self.receive()
+                        return
+                    }
+                }
+
+                if !data.isEmpty {
+                    self.bytesReceived += data.count
+                    self.onCorrection?(data)
+                    self.setState(.streaming(bytesReceived: self.bytesReceived))
+                }
+            }
+
+            if isComplete {
+                self.setState(.failed("The caster closed the connection."))
+                return
+            }
+            self.receive()
+        }
+    }
+
+    /// Most VRS networks stop sending corrections unless the rover keeps
+    /// reporting where it is, so the GGA goes back up the same socket. Without
+    /// this the stream connects, delivers for a minute, and quietly stalls —
+    /// which presents as "RTK stopped working" with no error anywhere.
+    private func startPositionReports() {
+        guard profile.sendPositionToCaster else { return }
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + 1, repeating: 10)
+        timer.setEventHandler { [weak self] in
+            guard let self, let gga = self.latestGga else { return }
+            self.connection?.send(
+                content: Data((gga + "\r\n").utf8),
+                completion: .idempotent
+            )
+        }
+        timer.resume()
+        positionTimer = timer
+    }
+
+    private static func describe(_ header: String) -> String {
+        if header.contains("401") { return "Caster rejected the username or password." }
+        if header.contains("404") { return "Mount point not found on this caster." }
+        if header.localizedCaseInsensitiveContains("SOURCETABLE") {
+            return "Caster returned its source table, which means the mount point is wrong."
+        }
+        return "Caster refused the connection."
+    }
+
+    private func setState(_ state: State) {
+        onStateChange?(state)
+    }
+}

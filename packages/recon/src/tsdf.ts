@@ -26,8 +26,15 @@
  */
 
 import { v3, bounds as boundsOps, type Bounds, type Vec3 } from '@pixmyd/core/math';
-import type { CameraModel, Pose } from '@pixmyd/core/bundle';
+import type { CameraModel, Mesh, Pose } from '@pixmyd/core/bundle';
 import { unprojectPixel, worldToCamera, projectPoint } from './camera.ts';
+import {
+  marchingTetrahedra,
+  computeVertexNormals,
+  removeSmallComponents,
+  type ColorSampler,
+  type FieldSampler,
+} from './marching.ts';
 
 /** Voxels per block edge. 8 gives 512 voxels per block. */
 export const BLOCK_SIZE = 8;
@@ -369,4 +376,47 @@ function rotateByPose(local: Vec3, pose: Pose): Vec3 {
 /** True when the point projects inside the frame and is in front of the camera. */
 export function isVisible(world: Vec3, pose: Pose, camera: CameraModel): boolean {
   return projectPoint(worldToCamera(world, pose), camera).visible;
+}
+
+/**
+ * Extract the fused surface as a mesh.
+ *
+ * Voxels that were never observed return `null` rather than a large positive
+ * distance, so the mesher leaves genuinely unseen regions open instead of
+ * capping them. An as-built with an honest hole is a note to go back to site;
+ * one with an invented lid is a measurement that was never taken.
+ */
+export function extractSurface(
+  volume: TsdfVolume,
+  options: { minWeight?: number; withColor?: boolean; minComponentTriangles?: number } = {},
+): Mesh {
+  const minWeight = options.minWeight ?? 0;
+  const { min, max } = volume.voxelBounds();
+  if (max[0] < min[0]) {
+    return { positions: new Float32Array(0), indices: new Uint32Array(0) };
+  }
+
+  const field: FieldSampler = (x, y, z) => {
+    const sample = volume.sample(x, y, z);
+    if (!sample || sample.weight < minWeight) return null;
+    return sample.sdf;
+  };
+
+  const color: ColorSampler | undefined = options.withColor
+    ? (x, y, z) => volume.sample(x, y, z)?.color ?? null
+    : undefined;
+
+  let mesh = marchingTetrahedra(field, {
+    min,
+    max,
+    voxelSize: volume.voxelSize,
+    originOffset: volume.voxelSize * 0.5,
+    isolevel: 0,
+    color,
+  });
+
+  const minComponent = options.minComponentTriangles ?? 24;
+  if (minComponent > 0) mesh = removeSmallComponents(mesh, minComponent);
+  if (mesh.indices.length > 0) mesh.normals = computeVertexNormals(mesh);
+  return mesh;
 }

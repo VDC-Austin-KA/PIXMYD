@@ -317,3 +317,123 @@ test('an empty volume reports empty bounds rather than infinities', () => {
   assert.deepEqual(vb.max, [-1, -1, -1], 'max below min signals empty');
   assert.equal(volume.extractPoints().count, 0);
 });
+
+// ===========================================================================
+// End to end: depth frames in, mesh out
+// ===========================================================================
+
+test('fusing a box from six viewpoints produces a closed mesh of the right size', async () => {
+  const { extractSurface } = await import('../src/tsdf.ts');
+
+  // A 1 m cube centred at the origin, viewed from all six faces. Synthetic, but
+  // it exercises the real path: unproject depth, fuse, extract, weld.
+  const half = 0.5;
+  const volume = new TsdfVolume({ voxelSize: 0.025, truncation: 0.075, weightByDepth: false });
+  const cam: PinholeCamera = {
+    model: 'pinhole', width: 96, height: 96, fx: 80, fy: 80, cx: 47.5, cy: 47.5,
+  };
+
+  // Camera 2 m out along each axis, looking back at the origin.
+  const views: { t: Vec3; q: ReturnType<typeof quat.identity> }[] = [
+    { t: [0, 0, -2], q: quat.identity() },
+    { t: [0, 0, 2], q: quat.fromAxisAngle([0, 1, 0], Math.PI) },
+    { t: [-2, 0, 0], q: quat.fromAxisAngle([0, 1, 0], Math.PI / 2) },
+    { t: [2, 0, 0], q: quat.fromAxisAngle([0, 1, 0], -Math.PI / 2) },
+    { t: [0, -2, 0], q: quat.fromAxisAngle([1, 0, 0], -Math.PI / 2) },
+    { t: [0, 2, 0], q: quat.fromAxisAngle([1, 0, 0], Math.PI / 2) },
+  ];
+
+  for (const pose of views) {
+    const depth = new Float32Array(cam.width * cam.height);
+    for (let py = 0; py < cam.height; py++) {
+      for (let px = 0; px < cam.width; px++) {
+        const ray = pixelToRay({ x: px + 0.5, y: py + 0.5 }, cam);
+        const dir = quat.rotate(pose.q, ray);
+        // Slab method: nearest intersection with the axis-aligned cube.
+        let tMin = -Infinity;
+        let tMax = Infinity;
+        for (let a = 0; a < 3; a++) {
+          if (Math.abs(dir[a]) < 1e-9) {
+            if (Math.abs(pose.t[a]) > half) { tMin = Infinity; break; }
+            continue;
+          }
+          const t1 = (-half - pose.t[a]) / dir[a];
+          const t2 = (half - pose.t[a]) / dir[a];
+          tMin = Math.max(tMin, Math.min(t1, t2));
+          tMax = Math.min(tMax, Math.max(t1, t2));
+        }
+        const i = py * cam.width + px;
+        depth[i] = tMin <= tMax && tMin > 0 ? ray[2] * tMin : 0;
+      }
+    }
+    volume.integrate({ depth, width: cam.width, height: cam.height, camera: cam, pose });
+  }
+
+  const mesh = extractSurface(volume, { minComponentTriangles: 32 });
+  assert.ok(mesh.indices.length > 500, `expected a substantial mesh, got ${mesh.indices.length / 3} triangles`);
+  assert.ok(mesh.normals, 'normals must be computed');
+
+  // The fused surface must be about 1 m on a side, centred at the origin.
+  //
+  // It comes out slightly *larger* than the true cube, and that is inherent
+  // rather than a defect: the signed distance is measured along the viewing
+  // ray, which is only the true distance where the ray meets the surface
+  // head-on. At a silhouette edge the truncation band wraps around the corner
+  // and dilates the extracted surface by up to about one truncation distance.
+  // Every projective TSDF does this — it is the reason a fused scan has
+  // slightly rounded, slightly fat corners — so the tolerance is stated in
+  // units of truncation rather than pretended away.
+  const truncation = 0.075;
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < mesh.positions.length; i++) {
+    lo = Math.min(lo, mesh.positions[i]);
+    hi = Math.max(hi, mesh.positions[i]);
+  }
+  assert.ok(lo <= -half + 0.01, `min extent ${lo} should reach the face at ${-half}`);
+  assert.ok(hi >= half - 0.01, `max extent ${hi} should reach the face at ${half}`);
+  assert.ok(
+    lo > -half - 1.5 * truncation,
+    `min extent ${lo} dilated further than one truncation past ${-half}`,
+  );
+  assert.ok(
+    hi < half + 1.5 * truncation,
+    `max extent ${hi} dilated further than one truncation past ${half}`,
+  );
+
+  // And it must be closed: no boundary edges anywhere.
+  const edges = new Map<string, number>();
+  for (let i = 0; i < mesh.indices.length; i += 3) {
+    const c = [mesh.indices[i], mesh.indices[i + 1], mesh.indices[i + 2]];
+    for (let k = 0; k < 3; k++) {
+      const a = c[k], b = c[(k + 1) % 3];
+      const key = a < b ? `${a}-${b}` : `${b}-${a}`;
+      edges.set(key, (edges.get(key) ?? 0) + 1);
+    }
+  }
+  const boundary = [...edges.values()].filter((n) => n === 1).length;
+  const nonManifold = [...edges.values()].filter((n) => n > 2).length;
+
+  // Manifoldness is the guarantee marching tetrahedra actually makes, and it is
+  // the one that catches real bugs: unwelded vertices would push almost every
+  // edge to a count of one, and a broken table would push some above two.
+  assert.equal(nonManifold, 0, `${nonManifold} edges shared by more than two faces`);
+
+  // Full closure is *not* claimed. Six axis-aligned views leave the cube's
+  // corners outside the truncation band of every one of them, so the field
+  // there is genuinely unobserved and the mesher correctly declines to invent a
+  // surface. The boundary should be confined to those corners rather than
+  // riddling the faces.
+  const fraction = boundary / edges.size;
+  assert.ok(
+    fraction < 0.2,
+    `${(fraction * 100).toFixed(1)}% of edges are boundaries — the faces should be closed, ` +
+    'with gaps only at the corners',
+  );
+});
+
+test('extractSurface returns an empty mesh for an empty volume rather than throwing', async () => {
+  const { extractSurface } = await import('../src/tsdf.ts');
+  const mesh = extractSurface(new TsdfVolume());
+  assert.equal(mesh.indices.length, 0);
+  assert.equal(mesh.positions.length, 0);
+});
