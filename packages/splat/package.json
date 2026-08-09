@@ -1,0 +1,15 @@
+{
+  "name": "@pixmyd/splat",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "@pixmyd/core": "*"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./gaussian": "./src/gaussian.ts",
+    "./train": "./src/train.ts",
+    "./covariance-grad": "./src/covariance-grad.ts"
+  }
+}

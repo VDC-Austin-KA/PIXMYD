@@ -48,7 +48,7 @@ is parsed back by three.js's loaders in the test suite.
 ## What works today
 
 Everything listed here is implemented and covered by the test suite
-(`npm test`, 178 tests, no network access required).
+(`npm test`, 261 tests, no network access required).
 
 ### Export formats — `packages/formats`
 
@@ -148,11 +148,12 @@ downstream needs a per-device special case.
 
 Stated plainly so nobody plans around vapour:
 
-- **Gaussian splat training.** The export path is complete and tested; the
-  WebGPU trainer that produces the splats is not written.
-- **Structure-from-motion.** Nothing yet solves poses from images alone, so
-  photogrammetry-only capture (drone, 360) has no pose source without metadata.
-  This is the gap that currently keeps the drone and 360 paths theoretical.
+- **A WebGPU path for splat training.** The trainer is a correct CPU reference
+  and is far too slow for a real capture — thousands of Gaussians, not millions.
+  The GPU port is the single largest remaining piece of work.
+- **Feature detection and matching.** The SfM *geometry* is built and tested,
+  but nothing yet finds correspondences between images, so the pipeline cannot
+  be driven end to end from photographs alone.
 - **A 3D viewer in the studio.** You can process and export, but not yet look
   at the result in the browser before you do.
 
@@ -167,9 +168,35 @@ packages/core      math, binary IO, the capture bundle schema
 packages/formats   PLY, GLB, OBJ, FBX, E57, LAS readers and writers
 packages/geo       ellipsoids, projections, State Plane, registration, NMEA
 packages/recon     camera models, TSDF fusion, marching tetrahedra
+packages/sfm       two-view geometry, PnP, bundle adjustment
+packages/splat     differentiable Gaussian splat rasterizer and trainer
+packages/ingest    EXIF/XMP, drone, 360 and COLMAP import
 apps/studio        the browser processing app
 apps/ios           the Swift capture app (uncompiled)
 ```
+
+### Structure-from-motion — `packages/sfm`
+
+Two-view geometry (eight-point essential matrix with cheirality selection),
+PnP with RANSAC and nonlinear refinement, and bundle adjustment by
+Levenberg-Marquardt with the Schur complement.
+
+### Gaussian splatting — `packages/splat`
+
+A differentiable rasterizer and trainer: anisotropic 3D Gaussians, spherical
+harmonics, Adam, and adaptive density control (clone, split, prune).
+
+**Every gradient is checked against central finite differences** — colour,
+opacity, position, log-scale and rotation. That matters more here than
+elsewhere: a trainer with a subtly wrong gradient still converges to something
+that looks like a scene, just blurrier, so the output does not reveal the bug.
+
+## Ingest — `packages/ingest`
+
+EXIF and XMP parsing written from the specification, so a folder of drone
+photographs becomes a capture with initial poses: GPS position, gimbal
+orientation, focal length and sensor width. Plus 360 panorama ingest with
+cube-face splitting, and COLMAP import and export.
 
 ## Running it
 

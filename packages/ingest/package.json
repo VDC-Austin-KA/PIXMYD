@@ -1,0 +1,15 @@
+{
+  "name": "@pixmyd/ingest",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "@pixmyd/core": "*",
+    "@pixmyd/geo": "*"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./exif": "./src/exif.ts",
+    "./sources": "./src/sources.ts"
+  }
+}
