@@ -24,6 +24,7 @@ let portableSources = [
     "Model/CaptureBundle.swift",
     "Export/Exporters.swift",
     "Export/TsdfVolume.swift",
+    "Export/MeshSimplify.swift",
     "RTK/NmeaAssembler.swift",
 ]
 

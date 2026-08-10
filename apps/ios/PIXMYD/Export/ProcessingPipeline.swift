@@ -74,6 +74,63 @@ final class ProcessingPipeline: ObservableObject {
         }
     }
 
+    /// How hard to work at making the file small.
+    ///
+    /// Separate from `Quality` on purpose. Voxel size decides what the scan
+    /// *measured*; this decides how much of that measurement survives into the
+    /// file. Conflating them means someone who wants a small file has to scan
+    /// coarsely, throwing away accuracy they already paid for on site.
+    ///
+    /// Marching tetrahedra emits triangles in proportion to surface area rather
+    /// than to detail, so a bare wall costs as much as pipework. That is why raw
+    /// exports run to hundreds of megabytes, and why decimation — not a coarser
+    /// scan — is the right fix.
+    enum Cleanup: String, CaseIterable, Identifiable {
+        case none, standard, aggressive
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .none: "None"
+            case .standard: "Standard"
+            case .aggressive: "Small file"
+            }
+        }
+
+        /// Fraction of triangles to keep.
+        var keepFraction: Double? {
+            switch self {
+            case .none: nil
+            case .standard: 0.25
+            case .aggressive: 0.06
+            }
+        }
+
+        /// Bounding-box diagonal below which a disconnected piece is noise,
+        /// as a multiple of the voxel size.
+        var noiseExtentInVoxels: Float {
+            switch self {
+            case .none: 0
+            case .standard: 3
+            case .aggressive: 6
+            }
+        }
+
+        var detail: String {
+            switch self {
+            case .none:
+                "Every triangle fusion produced. Largest files by far, and full "
+                    + "of isolated specks."
+            case .standard:
+                "Quarter of the triangles, and floating fragments removed. "
+                    + "Visually near-identical; the geometry that mattered is kept."
+            case .aggressive:
+                "About a sixteenth of the triangles. Flat surfaces stay flat and "
+                    + "corners stay sharp, but fine relief is lost."
+            }
+        }
+    }
+
     @Published private(set) var state: State = .idle
 
     private var task: Task<Void, Never>?
@@ -88,7 +145,12 @@ final class ProcessingPipeline: ObservableObject {
         state = .idle
     }
 
-    func run(project: CaptureProject, format: ExportFormat, quality: Quality) {
+    func run(
+        project: CaptureProject,
+        format: ExportFormat,
+        quality: Quality,
+        cleanup: Cleanup = .standard
+    ) {
         task?.cancel()
         state = .running(stage: "Reading capture", fraction: 0)
 
@@ -98,7 +160,8 @@ final class ProcessingPipeline: ObservableObject {
                 let result = try await Self.process(
                     project: project,
                     format: format,
-                    quality: quality
+                    quality: quality,
+                    cleanup: cleanup
                 ) { stage, fraction in
                     await MainActor.run {
                         self.state = .running(stage: stage, fraction: fraction)
@@ -128,6 +191,7 @@ final class ProcessingPipeline: ObservableObject {
         project: CaptureProject,
         format: ExportFormat,
         quality: Quality,
+        cleanup: Cleanup,
         progress: @escaping (String, Double) async -> Void
     ) async throws -> Result {
 
@@ -212,13 +276,46 @@ final class ProcessingPipeline: ObservableObject {
 
         switch format.kind {
         case .mesh:
-            let mesh = volume.extractSurface()
+            var mesh = volume.extractSurface()
             guard !mesh.indices.isEmpty else {
                 throw ProcessingError.emptyResult(
                     "Fusion produced no surface. The capture may be too sparse, or the "
                         + "detail setting too fine for the voxels that were observed."
                 )
             }
+
+            let rawTriangles = mesh.indices.count / 3
+
+            // Noise before decimation. Decimation spends a triangle budget on
+            // whatever it is given, so cleaning up afterwards means part of the
+            // budget went on representing specks faithfully.
+            if cleanup.noiseExtentInVoxels > 0 {
+                await progress("Removing noise", 0.8)
+                try Task.checkCancellation()
+                mesh = MeshSimplify.removeNoiseComponents(
+                    mesh,
+                    minimumExtent: max(
+                        cleanup.noiseExtentInVoxels * Float(quality.voxelSize), 0.10
+                    )
+                )
+            }
+
+            if let keep = cleanup.keepFraction {
+                await progress("Simplifying mesh", 0.85)
+                try Task.checkCancellation()
+                mesh = MeshSimplify.simplify(
+                    mesh,
+                    targetTriangles: max(64, Int(Double(mesh.indices.count / 3) * keep))
+                )
+            }
+
+            guard !mesh.indices.isEmpty else {
+                throw ProcessingError.emptyResult(
+                    "Everything fusion produced was removed as noise. Try a lower "
+                        + "cleanup setting."
+                )
+            }
+
             await progress("Writing \(format.title)", 0.9)
             switch format {
             case .glb:
@@ -237,7 +334,13 @@ final class ProcessingPipeline: ObservableObject {
                     colors: mesh.colors, indices: mesh.indices, to: url
                 )
             }
-            summary = "\(mesh.positions.count) vertices, \(mesh.indices.count / 3) triangles, "
+            let finalTriangles = mesh.indices.count / 3
+            // Report the reduction rather than just the result. Someone judging
+            // whether the cleanup setting was too harsh needs both numbers.
+            let reduction = rawTriangles > finalTriangles
+                ? " (down from \(rawTriangles))"
+                : ""
+            summary = "\(mesh.positions.count) vertices, \(finalTriangles) triangles\(reduction), "
                 + "\(quality.voxelSize * 1000) mm voxels"
                 + (mesh.colors == nil ? "." : ", coloured from \(integrated) frames.")
 
