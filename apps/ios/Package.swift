@@ -25,6 +25,7 @@ let portableSources = [
     "Export/Exporters.swift",
     "Export/TsdfVolume.swift",
     "Export/MeshSimplify.swift",
+    "Export/MeshEditing.swift",
     "Export/WebPageExport.swift",
     "RTK/NmeaAssembler.swift",
 ]

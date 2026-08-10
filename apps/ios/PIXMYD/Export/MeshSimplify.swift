@@ -20,6 +20,46 @@ import simd
 /// partly spent representing junk faithfully.
 enum MeshSimplify {
 
+    // MARK: - Connected components
+
+    /// Label every vertex with the representative of the connected piece it
+    /// belongs to. Two vertices share a label exactly when a path of triangle
+    /// edges joins them.
+    ///
+    /// Shared by noise removal and by the editor's "delete this piece", so that
+    /// what the editor deletes and what cleanup considers a fragment are the
+    /// same notion of "piece" rather than two implementations that drift.
+    static func connectedComponents(_ mesh: TsdfVolume.Mesh) -> [Int] {
+        var parent = Array(0..<mesh.positions.count)
+
+        func find(_ i: Int) -> Int {
+            var root = i
+            while parent[root] != root { root = parent[root] }
+            // Path compression. Without it this is O(n) per lookup on a long
+            // chain, and a wall is a very long chain.
+            var current = i
+            while parent[current] != root {
+                let next = parent[current]
+                parent[current] = root
+                current = next
+            }
+            return root
+        }
+
+        func union(_ a: Int, _ b: Int) {
+            let ra = find(a), rb = find(b)
+            if ra != rb { parent[rb] = ra }
+        }
+
+        for i in stride(from: 0, to: mesh.indices.count, by: 3) {
+            union(Int(mesh.indices[i]), Int(mesh.indices[i + 1]))
+            union(Int(mesh.indices[i + 1]), Int(mesh.indices[i + 2]))
+        }
+
+        // Resolve every vertex once so callers get O(1) lookups afterwards.
+        return (0..<mesh.positions.count).map { find($0) }
+    }
+
     // MARK: - Noise removal
 
     /// A connected component and the space it occupies.
@@ -55,31 +95,8 @@ enum MeshSimplify {
     ) -> TsdfVolume.Mesh {
         guard !mesh.indices.isEmpty else { return mesh }
 
-        var parent = Array(0..<mesh.positions.count)
-
-        func find(_ i: Int) -> Int {
-            var root = i
-            while parent[root] != root { root = parent[root] }
-            // Path compression. Without it this is O(n) per lookup on a long
-            // chain, and a wall is a very long chain.
-            var current = i
-            while parent[current] != root {
-                let next = parent[current]
-                parent[current] = root
-                current = next
-            }
-            return root
-        }
-
-        func union(_ a: Int, _ b: Int) {
-            let ra = find(a), rb = find(b)
-            if ra != rb { parent[rb] = ra }
-        }
-
-        for i in stride(from: 0, to: mesh.indices.count, by: 3) {
-            union(Int(mesh.indices[i]), Int(mesh.indices[i + 1]))
-            union(Int(mesh.indices[i + 1]), Int(mesh.indices[i + 2]))
-        }
+        let labels = connectedComponents(mesh)
+        func find(_ i: Int) -> Int { labels[i] }
 
         // One pass to measure every component: triangle count and bounds
         // together, so this costs no more than counting did.
@@ -118,7 +135,7 @@ enum MeshSimplify {
 
     /// Rebuild a mesh from the triangles a predicate keeps, dropping orphaned
     /// vertices and renumbering.
-    private static func compact(
+    static func compact(
         _ mesh: TsdfVolume.Mesh,
         keepTriangle: (Int) -> Bool
     ) -> TsdfVolume.Mesh {

@@ -20,6 +20,10 @@ struct ExportSheet: View {
     @State private var cleanup: ProcessingPipeline.Cleanup = .standard
     @State private var exportedURL: URL?
     @State private var showShare = false
+    /// Look at the result before writing it. On by default for meshes: the
+    /// whole complaint was not being able to tell what a scan produced without
+    /// exporting it and opening it somewhere else.
+    @State private var reviewFirst = true
 
     var body: some View {
         NavigationStack {
@@ -34,7 +38,10 @@ struct ExportSheet: View {
                         // Only meshes are decimated. A point cloud has no
                         // topology to collapse, so offering the control there
                         // would promise a reduction that never arrives.
-                        if format.kind == .mesh { cleanupPicker }
+                        if format.kind == .mesh {
+                            cleanupPicker
+                            reviewToggle
+                        }
                         progress
                     }
                 }
@@ -56,6 +63,51 @@ struct ExportSheet: View {
                     ShareSheet(items: [exportedURL])
                 }
             }
+            .fullScreenCover(isPresented: reviewBinding) {
+                if case .reviewing(let mesh, _) = processor.state {
+                    ModelViewer(mesh: mesh) { edited in
+                        processor.exportReviewed(
+                            mesh: edited,
+                            project: project,
+                            format: format,
+                            quality: quality,
+                            integratedFrames: project.frameCount
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    /// Presented from the pipeline's own state rather than a separate flag, so
+    /// the viewer cannot be showing while the pipeline thinks it is idle.
+    /// Dismissing it — cancelling the review — returns the pipeline to idle.
+    private var reviewBinding: Binding<Bool> {
+        Binding(
+            get: {
+                if case .reviewing = processor.state { return true }
+                return false
+            },
+            set: { presented in
+                if !presented, case .reviewing = processor.state { processor.cancel() }
+            }
+        )
+    }
+
+    private var reviewToggle: some View {
+        Panel {
+            Toggle(isOn: $reviewFirst) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Review before exporting")
+                        .font(Theme.Typeface.label(15, weight: .medium))
+                    Text("Look at the mesh, crop it, and delete stray pieces. "
+                         + "Nothing is written until you accept.")
+                        .font(Theme.Typeface.caption)
+                        .foregroundStyle(Theme.Palette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .tint(Theme.Palette.accent)
         }
     }
 
@@ -236,7 +288,15 @@ struct ExportSheet: View {
     }
 
     private func run() {
-        processor.run(project: project, format: format, quality: quality, cleanup: cleanup)
+        processor.run(
+            project: project,
+            format: format,
+            quality: quality,
+            cleanup: cleanup,
+            // Only meshes can be reviewed — the viewer renders triangles, and a
+            // point cloud has none.
+            reviewFirst: reviewFirst && format.kind == .mesh
+        )
     }
 }
 

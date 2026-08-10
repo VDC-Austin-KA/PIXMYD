@@ -24,6 +24,10 @@ final class ProcessingPipeline: ObservableObject {
     enum State: Equatable {
         case idle
         case running(stage: String, fraction: Double)
+        /// Fusion is done and the mesh is in memory, waiting to be looked at.
+        /// The file is not written until the user accepts, so an edit costs
+        /// nothing and a bad scan never becomes a deliverable by accident.
+        case reviewing(mesh: TsdfVolume.Mesh, summary: String)
         case finished(url: URL, summary: String)
         case failed(String)
     }
@@ -149,7 +153,8 @@ final class ProcessingPipeline: ObservableObject {
         project: CaptureProject,
         format: ExportFormat,
         quality: Quality,
-        cleanup: Cleanup = .standard
+        cleanup: Cleanup = .standard,
+        reviewFirst: Bool = false
     ) {
         task?.cancel()
         state = .running(stage: "Reading capture", fraction: 0)
@@ -157,18 +162,24 @@ final class ProcessingPipeline: ObservableObject {
         task = Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             do {
-                let result = try await Self.process(
+                let outcome = try await Self.process(
                     project: project,
                     format: format,
                     quality: quality,
-                    cleanup: cleanup
+                    cleanup: cleanup,
+                    reviewFirst: reviewFirst
                 ) { stage, fraction in
                     await MainActor.run {
                         self.state = .running(stage: stage, fraction: fraction)
                     }
                 }
                 await MainActor.run {
-                    self.state = .finished(url: result.url, summary: result.summary)
+                    switch outcome {
+                    case .file(let url, let summary):
+                        self.state = .finished(url: url, summary: summary)
+                    case .mesh(let mesh, let summary):
+                        self.state = .reviewing(mesh: mesh, summary: summary)
+                    }
                 }
             } catch is CancellationError {
                 await MainActor.run { self.state = .idle }
@@ -180,11 +191,104 @@ final class ProcessingPipeline: ObservableObject {
         }
     }
 
+    /// Write a mesh the user has just finished editing.
+    ///
+    /// Fusion is not repeated — the geometry on screen is exactly the geometry
+    /// written, which is the entire point of reviewing before export.
+    func exportReviewed(
+        mesh: TsdfVolume.Mesh,
+        project: CaptureProject,
+        format: ExportFormat,
+        quality: Quality,
+        integratedFrames: Int
+    ) {
+        state = .running(stage: "Writing \(format.title)", fraction: 0.9)
+        let url = Self.exportURL(for: project, format: format)
+
+        task = Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            do {
+                try Self.writeMesh(
+                    mesh, format: format, to: url,
+                    project: project, quality: quality, integrated: integratedFrames
+                )
+                let summary = "\(mesh.positions.count) vertices, "
+                    + "\(mesh.indices.count / 3) triangles, as edited."
+                await MainActor.run {
+                    self.state = .finished(url: url, summary: summary)
+                }
+            } catch {
+                await MainActor.run { self.state = .failed(error.localizedDescription) }
+            }
+        }
+    }
+
     // MARK: - Work
 
-    private struct Result {
-        let url: URL
-        let summary: String
+    private enum Outcome {
+        case file(URL, String)
+        case mesh(TsdfVolume.Mesh, String)
+    }
+
+    /// Write an already-built mesh. Shared by the straight-to-file path and by
+    /// export-after-review, so the two cannot drift into producing different
+    /// files from the same geometry.
+    static func writeMesh(
+        _ mesh: TsdfVolume.Mesh,
+        format: ExportFormat,
+        to url: URL,
+        project: CaptureProject,
+        quality: Quality,
+        integrated: Int
+    ) throws {
+        switch format {
+        case .glb:
+            try Exporters.writeGlb(
+                positions: mesh.positions, normals: mesh.normals,
+                colors: mesh.colors, indices: mesh.indices, to: url
+            )
+        case .obj:
+            try Exporters.writeObj(
+                positions: mesh.positions, normals: mesh.normals,
+                colors: mesh.colors, indices: mesh.indices, to: url
+            )
+        case .html:
+            // The page carries a GLB, so one is written to a scratch file and
+            // read back rather than duplicating the writer.
+            let glbURL = url.deletingPathExtension().appendingPathExtension("embedded.glb")
+            try Exporters.writeGlb(
+                positions: mesh.positions, normals: mesh.normals,
+                colors: mesh.colors, indices: mesh.indices, to: glbURL
+            )
+            defer { try? FileManager.default.removeItem(at: glbURL) }
+
+            try WebPageExport.write(
+                glb: try Data(contentsOf: glbURL),
+                name: project.name,
+                capturedAt: project.capturedAt,
+                facts: [
+                    .init(label: "Triangles", value: "\(mesh.indices.count / 3)"),
+                    .init(label: "Vertices", value: "\(mesh.positions.count)"),
+                    .init(label: "Resolution", value: "\(Int(quality.voxelSize * 1000)) mm"),
+                    .init(label: "Frames", value: "\(integrated)"),
+                ],
+                to: url
+            )
+        default:
+            try Exporters.writeMeshPly(
+                positions: mesh.positions, normals: mesh.normals,
+                colors: mesh.colors, indices: mesh.indices, to: url
+            )
+        }
+    }
+
+    /// Where exports are put, and the filename for one.
+    static func exportURL(for project: CaptureProject, format: ExportFormat) -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("exports", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let safeName = project.name.replacingOccurrences(of: "/", with: "-")
+        return directory.appendingPathComponent("\(safeName).\(format.rawValue)")
     }
 
     private static func process(
@@ -192,8 +296,9 @@ final class ProcessingPipeline: ObservableObject {
         format: ExportFormat,
         quality: Quality,
         cleanup: Cleanup,
+        reviewFirst: Bool,
         progress: @escaping (String, Double) async -> Void
-    ) async throws -> Result {
+    ) async throws -> Outcome {
 
         // --- read the bundle ---
         await progress("Reading capture", 0.02)
@@ -266,12 +371,7 @@ final class ProcessingPipeline: ObservableObject {
         await progress("Extracting surface", 0.75)
         try Task.checkCancellation()
 
-        let outputDirectory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("exports", isDirectory: true)
-        try? FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
-        let safeName = project.name.replacingOccurrences(of: "/", with: "-")
-        let url = outputDirectory.appendingPathComponent("\(safeName).\(format.rawValue)")
-
+        let url = Self.exportURL(for: project, format: format)
         let summary: String
 
         switch format.kind {
@@ -316,49 +416,6 @@ final class ProcessingPipeline: ObservableObject {
                 )
             }
 
-            await progress("Writing \(format.title)", 0.9)
-            switch format {
-            case .glb:
-                try Exporters.writeGlb(
-                    positions: mesh.positions, normals: mesh.normals,
-                    colors: mesh.colors, indices: mesh.indices, to: url
-                )
-            case .obj:
-                try Exporters.writeObj(
-                    positions: mesh.positions, normals: mesh.normals,
-                    colors: mesh.colors, indices: mesh.indices, to: url
-                )
-            case .html:
-                // The page carries a GLB, so it is written first to a scratch
-                // file and read back rather than duplicating the writer.
-                let glbURL = outputDirectory.appendingPathComponent("\(safeName)-embedded.glb")
-                try Exporters.writeGlb(
-                    positions: mesh.positions, normals: mesh.normals,
-                    colors: mesh.colors, indices: mesh.indices, to: glbURL
-                )
-                defer { try? FileManager.default.removeItem(at: glbURL) }
-
-                try WebPageExport.write(
-                    glb: try Data(contentsOf: glbURL),
-                    name: project.name,
-                    capturedAt: project.capturedAt,
-                    facts: [
-                        .init(label: "Triangles", value: "\(mesh.indices.count / 3)"),
-                        .init(label: "Vertices", value: "\(mesh.positions.count)"),
-                        .init(
-                            label: "Resolution",
-                            value: "\(Int(quality.voxelSize * 1000)) mm"
-                        ),
-                        .init(label: "Frames", value: "\(integrated)"),
-                    ],
-                    to: url
-                )
-            default:
-                try Exporters.writeMeshPly(
-                    positions: mesh.positions, normals: mesh.normals,
-                    colors: mesh.colors, indices: mesh.indices, to: url
-                )
-            }
             let finalTriangles = mesh.indices.count / 3
             // Report the reduction rather than just the result. Someone judging
             // whether the cleanup setting was too harsh needs both numbers.
@@ -368,6 +425,15 @@ final class ProcessingPipeline: ObservableObject {
             summary = "\(mesh.positions.count) vertices, \(finalTriangles) triangles\(reduction), "
                 + "\(quality.voxelSize * 1000) mm voxels"
                 + (mesh.colors == nil ? "." : ", coloured from \(integrated) frames.")
+
+            // Hand the mesh back unwritten when the user asked to look first.
+            if reviewFirst { return .mesh(mesh, summary) }
+
+            await progress("Writing \(format.title)", 0.9)
+            try writeMesh(
+                mesh, format: format, to: url,
+                project: project, quality: quality, integrated: integrated
+            )
 
         case .points, .either:
             let cloud = volume.extractPoints()
@@ -399,7 +465,7 @@ final class ProcessingPipeline: ObservableObject {
         }
 
         await progress("Done", 1)
-        return Result(url: url, summary: summary)
+        return .file(url, summary)
     }
 
     // MARK: - Loading
