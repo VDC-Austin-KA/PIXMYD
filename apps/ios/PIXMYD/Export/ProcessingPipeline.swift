@@ -27,10 +27,18 @@ final class ProcessingPipeline: ObservableObject {
         /// Fusion is done and the mesh is in memory, waiting to be looked at.
         /// The file is not written until the user accepts, so an edit costs
         /// nothing and a bad scan never becomes a deliverable by accident.
-        case reviewing(mesh: TsdfVolume.Mesh, summary: String)
+        ///
+        /// The mesh itself is in `reviewMesh`, not in here. `State` is
+        /// `Equatable` and SwiftUI compares it on every update — putting
+        /// millions of triangles inside would mean walking the whole array to
+        /// answer "did the state change".
+        case reviewing(summary: String)
         case finished(url: URL, summary: String)
         case failed(String)
     }
+
+    /// The mesh awaiting review, alongside `.reviewing`.
+    @Published private(set) var reviewMesh: TsdfVolume.Mesh?
 
     // The presets live in Model/ProcessingPresets.swift so they can be
     // compiled and tested on Linux; this class cannot, because Combine is
@@ -48,6 +56,7 @@ final class ProcessingPipeline: ObservableObject {
     func cancel() {
         task?.cancel()
         task = nil
+        reviewMesh = nil
         state = .idle
     }
 
@@ -80,7 +89,8 @@ final class ProcessingPipeline: ObservableObject {
                     case .file(let url, let summary):
                         self.state = .finished(url: url, summary: summary)
                     case .mesh(let mesh, let summary):
-                        self.state = .reviewing(mesh: mesh, summary: summary)
+                        self.reviewMesh = mesh
+                        self.state = .reviewing(summary: summary)
                     }
                 }
             } catch is CancellationError {
@@ -135,7 +145,12 @@ final class ProcessingPipeline: ObservableObject {
     /// Write an already-built mesh. Shared by the straight-to-file path and by
     /// export-after-review, so the two cannot drift into producing different
     /// files from the same geometry.
-    static func writeMesh(
+    ///
+    /// `nonisolated` because this class is `@MainActor`, which every member
+    /// inherits — including the static ones. Without it, encoding a GLB and
+    /// base64-ing it into a web page happens on the main thread while the
+    /// progress bar it is meant to be updating cannot redraw.
+    nonisolated static func writeMesh(
         _ mesh: TsdfVolume.Mesh,
         format: ExportFormat,
         to url: URL,
@@ -185,7 +200,7 @@ final class ProcessingPipeline: ObservableObject {
     }
 
     /// Where exports are put, and the filename for one.
-    static func exportURL(for project: CaptureProject, format: ExportFormat) -> URL {
+    nonisolated static func exportURL(for project: CaptureProject, format: ExportFormat) -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("exports", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -193,7 +208,13 @@ final class ProcessingPipeline: ObservableObject {
         return directory.appendingPathComponent("\(safeName).\(format.rawValue)")
     }
 
-    private static func process(
+    /// `nonisolated` for the same reason as `writeMesh`, and it matters more
+    /// here. This is the fusion loop — minutes of work on a real capture.
+    /// Awaiting a main-actor-isolated async function from a detached task hops
+    /// straight back to the main actor, so without this the `Task.detached`
+    /// above was decorative and every scan froze the interface it was
+    /// reporting progress to.
+    nonisolated private static func process(
         project: CaptureProject,
         format: ExportFormat,
         quality: Quality,

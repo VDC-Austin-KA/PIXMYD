@@ -69,7 +69,7 @@ struct ExportSheet: View {
                 }
             }
             .fullScreenCover(isPresented: reviewBinding) {
-                if case .reviewing(let mesh, _) = processor.state {
+                if let mesh = processor.reviewMesh {
                     ModelViewer(mesh: mesh) { edited in
                         processor.exportReviewed(
                             mesh: edited,
