@@ -328,6 +328,31 @@ final class ProcessingPipeline: ObservableObject {
                     positions: mesh.positions, normals: mesh.normals,
                     colors: mesh.colors, indices: mesh.indices, to: url
                 )
+            case .html:
+                // The page carries a GLB, so it is written first to a scratch
+                // file and read back rather than duplicating the writer.
+                let glbURL = outputDirectory.appendingPathComponent("\(safeName)-embedded.glb")
+                try Exporters.writeGlb(
+                    positions: mesh.positions, normals: mesh.normals,
+                    colors: mesh.colors, indices: mesh.indices, to: glbURL
+                )
+                defer { try? FileManager.default.removeItem(at: glbURL) }
+
+                try WebPageExport.write(
+                    glb: try Data(contentsOf: glbURL),
+                    name: project.name,
+                    capturedAt: project.capturedAt,
+                    facts: [
+                        .init(label: "Triangles", value: "\(mesh.indices.count / 3)"),
+                        .init(label: "Vertices", value: "\(mesh.positions.count)"),
+                        .init(
+                            label: "Resolution",
+                            value: "\(Int(quality.voxelSize * 1000)) mm"
+                        ),
+                        .init(label: "Frames", value: "\(integrated)"),
+                    ],
+                    to: url
+                )
             default:
                 try Exporters.writeMeshPly(
                     positions: mesh.positions, normals: mesh.normals,

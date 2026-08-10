@@ -412,7 +412,7 @@ enum Exporters {
 // MARK: - Format catalogue
 
 enum ExportFormat: String, CaseIterable, Identifiable {
-    case glb, obj, ply, e57, las, rcs
+    case glb, obj, ply, e57, las, html, rcs
 
     var id: String { rawValue }
 
@@ -423,13 +423,14 @@ enum ExportFormat: String, CaseIterable, Identifiable {
         case .ply: "PLY"
         case .e57: "E57"
         case .las: "LAS"
+        case .html: "Web page"
         case .rcs: "RCS / RCP"
         }
     }
 
     var kind: Kind {
         switch self {
-        case .glb, .obj: .mesh
+        case .glb, .obj, .html: .mesh
         case .ply: .either
         case .e57, .las, .rcs: .points
         }
@@ -444,6 +445,9 @@ enum ExportFormat: String, CaseIterable, Identifiable {
         case .ply: "Point cloud or mesh. The interchange format for scan data."
         case .e57: "Survey interchange. Carries the georeference and per-scan poses."
         case .las: "What GIS and Civil 3D expect. Millimetre precision at State Plane magnitudes."
+        case .html:
+            "The model inside a web page. Send it to anyone — it opens in a "
+                + "browser with nothing installed, and on a phone it can be placed in AR."
         case .rcs: "Autodesk ReCap. Proprietary — see below."
         }
     }
