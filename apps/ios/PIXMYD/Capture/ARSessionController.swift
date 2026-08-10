@@ -62,12 +62,12 @@ final class ARSessionController: NSObject, ObservableObject {
     /// Not a nicety: without it there is no metric depth, reconstruction falls
     /// back to photogrammetry alone, and scale comes from VIO rather than from
     /// measurement. The UI says so rather than quietly degrading.
-    static var hasLiDAR: Bool {
+    nonisolated static var hasLiDAR: Bool {
         ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
             && ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)
     }
 
-    static var isSupported: Bool { ARWorldTrackingConfiguration.isSupported }
+    nonisolated static var isSupported: Bool { ARWorldTrackingConfiguration.isSupported }
 
     // MARK: - Internals
 
@@ -396,7 +396,7 @@ extension ARSessionController: ARSessionDelegate {
         estimatedPointCount = capturedFrameCount * points.count
     }
 
-    private static func describe(_ state: ARCamera.TrackingState) -> TrackingState {
+    nonisolated private static func describe(_ state: ARCamera.TrackingState) -> TrackingState {
         switch state {
         case .normal:
             return .normal

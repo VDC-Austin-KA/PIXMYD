@@ -62,4 +62,33 @@ for file in $(find PIXMYD PIXMYDTests -name '*.swift' | sort); do
 done
 echo "done"
 
+# Every member of a @MainActor type inherits that isolation, static ones
+# included. A static helper is almost always a pure function of its arguments
+# and gets called from a detached task, where main-actor isolation is either a
+# compile error or — worse, because it is silent — an await that hops the work
+# back onto the main thread. Fusion ran on the main thread for weeks that way.
+#
+# Cost three separate cloud builds to find one function at a time, which is the
+# only reason this check exists.
+echo "=== Lint: main-actor static in a @MainActor type ==="
+for file in $(find PIXMYD -name '*.swift' | sort); do
+  hits=$(awk '
+    /^@MainActor[[:space:]]*$/ { pending = 1; next }
+    /^(final |public |private )*(class|struct|enum|actor) / {
+      isolated = pending; pending = 0; next
+    }
+    # Only flag file-scope types: a nested type resets nothing, but the
+    # indentation tells us we are inside one, and those inherit too.
+    isolated && /^[[:space:]]+(private |public |internal )*static (func|var) / &&
+      $0 !~ /nonisolated/ {
+      printf "%s:%d: static member of a @MainActor type is main-actor isolated; mark it nonisolated if it is a pure helper\n", FILENAME, NR
+    }
+  ' "$file")
+  if [ -n "$hits" ]; then
+    echo "$hits"
+    failures=1
+  fi
+done
+echo "done"
+
 exit $failures

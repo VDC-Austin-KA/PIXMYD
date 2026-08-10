@@ -178,7 +178,10 @@ final class ProjectStore: ObservableObject {
         save()
     }
 
-    private static func readManifest(at url: URL) -> CaptureProject? {
+    /// Reads and decodes a file, so there is no reason for it to be pinned to
+    /// the main thread — and a good reason not to be, if the project list ever
+    /// loads off it.
+    nonisolated private static func readManifest(at url: URL) -> CaptureProject? {
         let manifestURL = url.appendingPathComponent("manifest.json")
         guard let data = try? Data(contentsOf: manifestURL),
               let manifest = try? JSONDecoder().decode(CaptureManifest.self, from: data)

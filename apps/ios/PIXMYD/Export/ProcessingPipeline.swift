@@ -406,7 +406,11 @@ final class ProcessingPipeline: ObservableObject {
 
     // MARK: - Loading
 
-    private static func loadDepth(bundle: URL, ref: DepthMapRef) -> [Float]? {
+    // The three loaders below read files and return arrays. Like everything
+    // else static on this class they inherit its @MainActor isolation unless
+    // told otherwise, and `process` — which is nonisolated — is their only
+    // caller.
+    nonisolated private static func loadDepth(bundle: URL, ref: DepthMapRef) -> [Float]? {
         guard let data = try? Data(contentsOf: bundle.appendingPathComponent(ref.uri)) else {
             return nil
         }
@@ -422,7 +426,7 @@ final class ProcessingPipeline: ObservableObject {
         return depth
     }
 
-    private static func loadConfidence(bundle: URL, uri: String, count: Int) -> [UInt8]? {
+    nonisolated private static func loadConfidence(bundle: URL, uri: String, count: Int) -> [UInt8]? {
         guard let data = try? Data(contentsOf: bundle.appendingPathComponent(uri)),
               data.count >= count else { return nil }
         return [UInt8](data.prefix(count))
@@ -430,7 +434,7 @@ final class ProcessingPipeline: ObservableObject {
 
     /// Decodes the frame's JPEG to top-row-first RGBA8. Colour is fused at
     /// full sensor resolution; the 256×192 depth map only decides visibility.
-    private static func loadColor(bundle: URL, uri: String) -> [UInt8]? {
+    nonisolated private static func loadColor(bundle: URL, uri: String) -> [UInt8]? {
         #if canImport(ImageIO)
         guard let source = CGImageSourceCreateWithURL(
             bundle.appendingPathComponent(uri) as CFURL, nil
