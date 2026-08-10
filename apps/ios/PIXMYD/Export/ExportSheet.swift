@@ -13,6 +13,11 @@ struct ExportSheet: View {
     @StateObject private var processor = ProcessingPipeline()
     @State private var format: ExportFormat = .glb
     @State private var quality: ProcessingPipeline.Quality = .balanced
+    // Standard by default. The raw output of fusion is not a sensible
+    // deliverable — it is hundreds of megabytes of mostly-flat triangles and
+    // floating specks — so "no cleanup" is the deliberate choice, not the
+    // default anyone lands on by accident.
+    @State private var cleanup: ProcessingPipeline.Cleanup = .standard
     @State private var exportedURL: URL?
     @State private var showShare = false
 
@@ -26,6 +31,10 @@ struct ExportSheet: View {
                         rcsBridge
                     } else {
                         qualityPicker
+                        // Only meshes are decimated. A point cloud has no
+                        // topology to collapse, so offering the control there
+                        // would promise a reduction that never arrives.
+                        if format.kind == .mesh { cleanupPicker }
                         progress
                     }
                 }
@@ -85,6 +94,24 @@ struct ExportSheet: View {
                         Divider().overlay(Theme.Palette.hairline)
                     }
                 }
+            }
+        }
+    }
+
+    private var cleanupPicker: some View {
+        Panel(title: "Cleanup") {
+            VStack(alignment: .leading, spacing: Theme.Metrics.gutterTight) {
+                Picker("Cleanup", selection: $cleanup) {
+                    ForEach(ProcessingPipeline.Cleanup.allCases) { level in
+                        Text(level.label).tag(level)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Text(cleanup.detail)
+                    .font(Theme.Typeface.caption)
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -209,7 +236,7 @@ struct ExportSheet: View {
     }
 
     private func run() {
-        processor.run(project: project, format: format, quality: quality)
+        processor.run(project: project, format: format, quality: quality, cleanup: cleanup)
     }
 }
 

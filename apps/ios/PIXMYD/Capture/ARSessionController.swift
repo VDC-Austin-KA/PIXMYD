@@ -106,7 +106,15 @@ final class ARSessionController: NSObject, ObservableObject {
         config.planeDetection = []
 
         if Self.hasLiDAR {
-            config.sceneReconstruction = .mesh
+            // Classification costs a little extra on the Neural Engine and
+            // gives a per-face label — wall, floor, ceiling, table, seat,
+            // window, door — computed by ARKit whether or not it is asked for
+            // in this form. Taking the classified variant where it is available
+            // means semantics are free rather than a model to train.
+            config.sceneReconstruction =
+                ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification)
+                ? .meshWithClassification
+                : .mesh
             config.frameSemantics.insert(.sceneDepth)
             config.frameSemantics.insert(.smoothedSceneDepth)
         }
