@@ -179,7 +179,11 @@ final class ARSessionController: NSObject, ObservableObject {
         isRecording = false
         isPaused = false
         self.writer = nil
-        return try await writer.finish()
+        var project = try await writer.finish()
+        // Record how it was captured, so export defaults to settings that
+        // match rather than to room-sized ones for a scan of a valve.
+        project.scanMode = settings.mode
+        return project
     }
 
     func cancelRecording() async {

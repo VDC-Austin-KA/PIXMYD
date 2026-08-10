@@ -32,109 +32,11 @@ final class ProcessingPipeline: ObservableObject {
         case failed(String)
     }
 
-    enum Quality: String, CaseIterable, Identifiable {
-        case fast, balanced, fine
-        var id: String { rawValue }
-
-        var label: String {
-            switch self {
-            case .fast: "Fast"
-            case .balanced: "Balanced"
-            case .fine: "Fine"
-            }
-        }
-
-        /// Voxel edge in metres. This is the single knob that decides both
-        /// detail and cost, and cost scales with its cube.
-        var voxelSize: Double {
-            switch self {
-            case .fast: 0.05
-            case .balanced: 0.025
-            case .fine: 0.012
-            }
-        }
-
-        var detail: String {
-            switch self {
-            case .fast:
-                "50 mm voxels. Quick, and enough for volumes and context."
-            case .balanced:
-                "25 mm voxels. The right default for as-built documentation."
-            case .fine:
-                "12 mm voxels. Slow and memory-hungry; use it on a single room, "
-                    + "not a floorplate."
-            }
-        }
-
-        /// Frames processed per second, measured on an A17-class device. Used
-        /// only for the time estimate — a wrong estimate is better than none,
-        /// but it should be roughly right.
-        var framesPerSecond: Double {
-            switch self {
-            case .fast: 22
-            case .balanced: 9
-            case .fine: 2.5
-            }
-        }
-    }
-
-    /// How hard to work at making the file small.
-    ///
-    /// Separate from `Quality` on purpose. Voxel size decides what the scan
-    /// *measured*; this decides how much of that measurement survives into the
-    /// file. Conflating them means someone who wants a small file has to scan
-    /// coarsely, throwing away accuracy they already paid for on site.
-    ///
-    /// Marching tetrahedra emits triangles in proportion to surface area rather
-    /// than to detail, so a bare wall costs as much as pipework. That is why raw
-    /// exports run to hundreds of megabytes, and why decimation — not a coarser
-    /// scan — is the right fix.
-    enum Cleanup: String, CaseIterable, Identifiable {
-        case none, standard, aggressive
-        var id: String { rawValue }
-
-        var label: String {
-            switch self {
-            case .none: "None"
-            case .standard: "Standard"
-            case .aggressive: "Small file"
-            }
-        }
-
-        /// Fraction of triangles to keep.
-        var keepFraction: Double? {
-            switch self {
-            case .none: nil
-            case .standard: 0.25
-            case .aggressive: 0.06
-            }
-        }
-
-        /// Bounding-box diagonal below which a disconnected piece is noise,
-        /// as a multiple of the voxel size.
-        var noiseExtentInVoxels: Float {
-            switch self {
-            case .none: 0
-            case .standard: 3
-            case .aggressive: 6
-            }
-        }
-
-        var detail: String {
-            switch self {
-            case .none:
-                "Every triangle fusion produced. Largest files by far, and full "
-                    + "of isolated specks."
-            case .standard:
-                "Quarter of the triangles, and floating fragments removed. "
-                    + "Visually near-identical; the geometry that mattered is kept."
-            case .aggressive:
-                "About a sixteenth of the triangles. Flat surfaces stay flat and "
-                    + "corners stay sharp, but fine relief is lost."
-            }
-        }
-    }
-
+    // The presets live in Model/ProcessingPresets.swift so they can be
+    // compiled and tested on Linux; this class cannot, because Combine is
+    // Apple-only. Re-exported here so every call site reads unchanged.
+    typealias Quality = ProcessingQuality
+    typealias Cleanup = ProcessingCleanup
     @Published private(set) var state: State = .idle
 
     private var task: Task<Void, Never>?
@@ -319,7 +221,16 @@ final class ProcessingPipeline: ObservableObject {
         guard !frames.isEmpty else { throw CaptureError.noFrames }
 
         // --- fuse ---
-        let volume = TsdfVolume(voxelSize: quality.voxelSize)
+        // A scan of a valve and a scan of a warehouse bay want different depth
+        // windows. Accepting a 4 m reading while scanning a fitting fuses the
+        // wall behind it into the part; refusing anything past 1.5 m in a room
+        // discards most of the room.
+        let mode = project.scanMode ?? .room
+        let volume = TsdfVolume(
+            voxelSize: quality.voxelSize,
+            minDepth: mode.minDepth,
+            maxDepth: mode.maxDepth
+        )
         var integrated = 0
 
         for (index, frame) in frames.enumerated() {
@@ -392,10 +303,14 @@ final class ProcessingPipeline: ObservableObject {
             if cleanup.noiseExtentInVoxels > 0 {
                 await progress("Removing noise", 0.8)
                 try Task.checkCancellation()
+                // The floor comes from the mode, not from a constant. 100 mm is
+                // right for a room — buildings have no 4 cm features floating
+                // unattached — and would delete the subject of an object scan.
                 mesh = MeshSimplify.removeNoiseComponents(
                     mesh,
                     minimumExtent: max(
-                        cleanup.noiseExtentInVoxels * Float(quality.voxelSize), 0.10
+                        cleanup.noiseExtentInVoxels * Float(quality.voxelSize),
+                        mode.noiseExtent()
                     )
                 )
             }

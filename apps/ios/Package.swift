@@ -22,6 +22,9 @@ import PackageDescription
 // build, which is the point.
 let portableSources = [
     "Model/CaptureBundle.swift",
+    "Model/ScanMode.swift",
+    "Model/CaptureSettings.swift",
+    "Model/ProcessingPresets.swift",
     "Export/Exporters.swift",
     "Export/TsdfVolume.swift",
     "Export/MeshSimplify.swift",

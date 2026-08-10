@@ -24,6 +24,10 @@ struct ExportSheet: View {
     /// whole complaint was not being able to tell what a scan produced without
     /// exporting it and opening it somewhere else.
     @State private var reviewFirst = true
+    /// True until the user touches Detail or Cleanup, so the defaults can be
+    /// taken from how the scan was captured without overwriting a deliberate
+    /// choice on a later re-render.
+    @State private var usingCaptureDefaults = true
 
     var body: some View {
         NavigationStack {
@@ -50,6 +54,7 @@ struct ExportSheet: View {
             .background(Theme.Palette.background)
             .navigationTitle("Export")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear(perform: adoptCaptureDefaults)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") {
@@ -77,6 +82,18 @@ struct ExportSheet: View {
                 }
             }
         }
+    }
+
+    /// Start from the mode the scan was captured in.
+    ///
+    /// A scan of a valve taken in Object mode defaulting to 25 mm voxels and
+    /// room-sized noise removal would come out smoothed away, and the person
+    /// exporting it has no reason to suspect the default was wrong for it.
+    private func adoptCaptureDefaults() {
+        guard usingCaptureDefaults, let mode = project.scanMode else { return }
+        quality = ProcessingPipeline.Quality.matching(voxelSize: mode.voxelSize)
+        cleanup = ProcessingPipeline.Cleanup.matching(keepFraction: mode.keepFraction)
+        usingCaptureDefaults = false
     }
 
     /// Presented from the pipeline's own state rather than a separate flag, so

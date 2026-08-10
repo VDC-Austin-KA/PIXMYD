@@ -12,6 +12,10 @@ struct CaptureProject: Identifiable, Hashable, Codable {
     var state: State
     /// Set once the capture has been fitted to control.
     var registrationRms: Double?
+    /// How this was captured, so processing can default to match. Optional
+    /// because projects recorded before modes existed do not have one, and
+    /// those decode as nil rather than failing to load at all.
+    var scanMode: ScanMode?
 
     enum State: String, Codable, CaseIterable, Identifiable {
         case captured, processing, processed, failed
