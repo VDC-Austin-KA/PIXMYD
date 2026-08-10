@@ -136,6 +136,24 @@ final class TsdfVolume {
                 let confidenceWeight = confidence.map { Float($0[i] + 1) / 3 } ?? 1
                 let weight = depthWeight * confidenceWeight
 
+                // How square-on this pixel sees the surface, from the depth map
+                // itself — two neighbouring depth samples give the local
+                // tangent plane, so this needs nothing the fusion did not
+                // already have.
+                //
+                // Colour quality falls off with incidence far faster than
+                // geometry does. At a glancing angle one texel is stretched
+                // across many pixels, motion blur is worst, and the lens is
+                // resolving least; the surface distance is still fine. Squaring
+                // the cosine makes a face-on view worth several oblique ones
+                // without ever discarding a region only ever seen obliquely,
+                // which a hard cutoff would leave grey.
+                let colorWeight = weight * incidenceCosine(
+                    depth: depth, index: i, x: px, y: py,
+                    width: width, height: height,
+                    fx: fx, fy: fy, cx: cx, cy: cy
+                )
+
                 for s in 0...stepCount {
                     let along = -trunc + Float(s) * step
                     let p = worldSurface + worldRay * along
@@ -181,14 +199,21 @@ final class TsdfVolume {
                         voxel: voxel,
                         sdf: max(-1, min(1, sdf / trunc)),
                         weight: weight,
-                        color: voxelColor
+                        color: voxelColor,
+                        colorWeight: colorWeight
                     )
                 }
             }
         }
     }
 
-    private func update(voxel: SIMD3<Int32>, sdf: Float, weight: Float, color: SIMD3<Float>?) {
+    private func update(
+        voxel: SIMD3<Int32>,
+        sdf: Float,
+        weight: Float,
+        color: SIMD3<Float>?,
+        colorWeight: Float
+    ) {
         let block = SIMD3<Int32>(
             Int32((Double(voxel.x) / 8).rounded(.down)),
             Int32((Double(voxel.y) / 8).rounded(.down)),
@@ -212,13 +237,79 @@ final class TsdfVolume {
         entry.sdf[index] = (entry.sdf[index] * w0 + sdf * weight) / w1
         entry.weight[index] = w1
 
-        if let color {
+        // Colour carries its own weight. What makes a good *geometric*
+        // observation and what makes a good *colour* observation are different
+        // questions: a wall seen edge-on still measures its distance fine, but
+        // its colour is smeared across a few pixels at a glancing angle and
+        // should not outvote a square-on look at the same patch.
+        if let color, colorWeight > 0 {
             let cw0 = entry.colorWeight[index]
-            let cw1 = cw0 + weight
-            entry.color[index] = (entry.color[index] * cw0 + color * weight) / cw1
+            let cw1 = cw0 + colorWeight
+            entry.color[index] = (entry.color[index] * cw0 + color * colorWeight) / cw1
             entry.colorWeight[index] = cw1
             hasColor = true
         }
+    }
+
+    /// Squared cosine of the angle between the surface and the viewing ray at
+    /// one depth pixel, in 0...1. Face-on is 1, edge-on is 0.
+    ///
+    /// The normal comes from the depth map: unprojecting this pixel and its
+    /// right and lower neighbours gives two tangent vectors whose cross product
+    /// is the surface normal, all in camera space. That is three unprojections
+    /// per pixel and no extra buffers.
+    ///
+    /// Returns 1 — treat as face-on — wherever the estimate cannot be trusted:
+    /// at the last row or column, and across a depth discontinuity. At a jump
+    /// from a near object to a far wall the "tangent" spans the gap and the
+    /// normal points nowhere real. Guessing face-on there is the safe failure:
+    /// it weights the sample normally instead of silently dropping the colour of
+    /// every object edge in the scan.
+    private func incidenceCosine(
+        depth: [Float], index: Int, x: Int, y: Int,
+        width: Int, height: Int,
+        fx: Float, fy: Float, cx: Float, cy: Float
+    ) -> Float {
+        guard x + 1 < width, y + 1 < height else { return 1 }
+
+        let d = depth[index]
+        let dx = depth[index + 1]
+        let dy = depth[index + width]
+        guard dx > 0, dy > 0 else { return 1 }
+
+        // Tell a steep surface from an actual depth discontinuity.
+        //
+        // The depth step across one pixel on a surface at incidence θ is
+        // d·tan(θ)/f. Anything past about 80 degrees is not a surface this
+        // camera is measuring usefully, so that is the cutoff — steeper than
+        // that, or across an object edge, and the normal below is meaningless.
+        //
+        // A flat percentage was wrong here: 5% of range calls a wall seen at 72
+        // degrees a discontinuity and bails out reporting face-on, which
+        // over-weights exactly the glancing colour this is meant to demote.
+        let maximumStep = d * 5.67 / min(fx, fy) + 0.002
+        guard abs(dx - d) < maximumStep, abs(dy - d) < maximumStep else { return 1 }
+
+        func unproject(_ px: Int, _ py: Int, _ depth: Float) -> SIMD3<Float> {
+            SIMD3(
+                (Float(px) + 0.5 - cx) * depth / fx,
+                (Float(py) + 0.5 - cy) * depth / fy,
+                depth
+            )
+        }
+
+        let p = unproject(x, y, d)
+        let normal = simd_cross(unproject(x + 1, y, dx) - p, unproject(x, y + 1, dy) - p)
+        let length = simd_length(normal)
+        let rayLength = simd_length(p)
+        guard length > 1e-12, rayLength > 1e-12 else { return 1 }
+
+        // The ray points from the camera at the origin toward p, so the
+        // incidence cosine is the angle between the normal and -p. abs()
+        // because the normal's sign depends on pixel ordering, not on which
+        // way the surface faces.
+        let cosine = abs(simd_dot(normal / length, -p / rayLength))
+        return min(1, cosine * cosine)
     }
 
     // MARK: - Sampling
