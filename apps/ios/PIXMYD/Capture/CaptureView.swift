@@ -155,13 +155,17 @@ struct CaptureView: View {
         }
         .disabled(!ARSessionController.hasLiDAR)
         .opacity(ARSessionController.hasLiDAR ? 1 : 0.35)
-        .accessibilityLabel(
-            switch meshStyle {
-            case .coverage: "Scene mesh: coverage. Tap for surface colours."
-            case .classification: "Scene mesh: surfaces. Tap to hide."
-            case nil: "Scene mesh hidden. Tap to show coverage."
-            }
-        )
+        .accessibilityLabel(meshAccessibilityLabel)
+    }
+
+    /// A `switch` expression is only allowed in a return, a throw, or the right
+    /// side of an assignment — not inline as an argument.
+    private var meshAccessibilityLabel: String {
+        switch meshStyle {
+        case .coverage: return "Scene mesh: coverage. Tap for surface colours."
+        case .classification: return "Scene mesh: surfaces. Tap to hide."
+        case nil: return "Scene mesh hidden. Tap to show coverage."
+        }
     }
 
     private var trackingBadge: some View {

@@ -1,4 +1,5 @@
 import ARKit
+import Foundation
 import SceneKit
 import simd
 
@@ -14,7 +15,12 @@ import simd
 /// `sceneReconstruction` builds these anchors whether or not anything renders
 /// them; all this does is hand the existing Metal buffers to SceneKit. The
 /// vertex and index buffers are wrapped, not copied.
-@MainActor
+/// Not main-actor isolated, deliberately. `ARSCNViewDelegate` callbacks arrive
+/// on SceneKit's rendering thread, not the main thread, so annotating this
+/// `@MainActor` was both a Swift 6 concurrency error and a plain misstatement
+/// of where the code runs. Settings are written from `updateUIView` on the main
+/// thread and read on the render thread, which is a real race, so the shared
+/// state is behind a lock rather than merely un-annotated.
 final class SceneMeshOverlay: NSObject, ARSCNViewDelegate {
 
     /// How faces are coloured.
@@ -34,57 +40,101 @@ final class SceneMeshOverlay: NSObject, ARSCNViewDelegate {
         }
     }
 
-    var isEnabled = false {
-        didSet { rootNode?.isHidden = !isEnabled }
-    }
-
-    var style: Style = .coverage {
-        didSet { if style != oldValue { rebuildAll() } }
-    }
-
-    private weak var rootNode: SCNNode?
+    /// Guards everything below it. Held only around dictionary access and the
+    /// two settings — never across `SCNGeometry` construction, which is the
+    /// expensive part and touches nothing shared.
+    private let lock = NSLock()
+    private var storedIsEnabled = false
+    private var storedStyle: Style = .coverage
     private var nodes: [UUID: SCNNode] = [:]
     private var anchors: [UUID: ARMeshAnchor] = [:]
+
+    var isEnabled: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return storedIsEnabled }
+        set {
+            lock.lock()
+            let changed = storedIsEnabled != newValue
+            storedIsEnabled = newValue
+            let affected = changed ? Array(nodes.values) : []
+            lock.unlock()
+
+            for node in affected { node.isHidden = !newValue }
+            if changed, newValue { rebuildAll() }
+        }
+    }
+
+    var style: Style {
+        get { lock.lock(); defer { lock.unlock() }; return storedStyle }
+        set {
+            lock.lock()
+            let changed = storedStyle != newValue
+            storedStyle = newValue
+            lock.unlock()
+
+            if changed { rebuildAll() }
+        }
+    }
 
     // MARK: - ARSCNViewDelegate
 
     func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
         guard let mesh = anchor as? ARMeshAnchor else { return }
+
+        lock.lock()
         anchors[anchor.identifier] = mesh
         nodes[anchor.identifier] = node
-        node.isHidden = !isEnabled
-        if rootNode == nil { rootNode = node.parent }
-        apply(mesh, to: node)
+        let enabled = storedIsEnabled
+        let style = storedStyle
+        lock.unlock()
+
+        node.isHidden = !enabled
+        if enabled { node.geometry = Self.geometry(from: mesh.geometry, style: style) }
     }
 
     func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
-        guard isEnabled, let mesh = anchor as? ARMeshAnchor else { return }
+        guard let mesh = anchor as? ARMeshAnchor else { return }
+
+        lock.lock()
         anchors[anchor.identifier] = mesh
+        let enabled = storedIsEnabled
+        let style = storedStyle
+        lock.unlock()
+
         // ARKit revises a block's geometry as it accumulates evidence, so the
         // node has to be rebuilt rather than merely re-posed. Skipping this is
         // how live meshes end up frozen at their first, roughest estimate.
-        apply(mesh, to: node)
+        guard enabled else { return }
+        node.geometry = Self.geometry(from: mesh.geometry, style: style)
     }
 
     func renderer(_ renderer: SCNSceneRenderer, didRemove node: SCNNode, for anchor: ARAnchor) {
+        lock.lock()
         anchors[anchor.identifier] = nil
         nodes[anchor.identifier] = nil
+        lock.unlock()
     }
 
     func reset() {
-        for node in nodes.values { node.geometry = nil }
+        lock.lock()
+        let existing = Array(nodes.values)
         nodes.removeAll()
         anchors.removeAll()
+        lock.unlock()
+
+        for node in existing { node.geometry = nil }
     }
 
     private func rebuildAll() {
-        for (id, anchor) in anchors {
-            if let node = nodes[id] { apply(anchor, to: node) }
-        }
-    }
+        lock.lock()
+        let work = anchors.compactMap { id, anchor in nodes[id].map { ($0, anchor) } }
+        let enabled = storedIsEnabled
+        let style = storedStyle
+        lock.unlock()
 
-    private func apply(_ anchor: ARMeshAnchor, to node: SCNNode) {
-        node.geometry = Self.geometry(from: anchor.geometry, style: style)
+        guard enabled else { return }
+        for (node, anchor) in work {
+            node.geometry = Self.geometry(from: anchor.geometry, style: style)
+        }
     }
 
     // MARK: - ARMeshGeometry to SCNGeometry
