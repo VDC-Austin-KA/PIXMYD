@@ -22,11 +22,25 @@ import simd
 ///    lid is a measurement that was never taken.
 final class TsdfVolume {
 
+    /// A baked colour texture, in an encoded form a writer can embed directly.
+    /// `data` is PNG bytes; the encoder lives on Apple platforms, the writer
+    /// side of every exporter is portable.
+    struct TextureImage: Equatable, Sendable {
+        var width: Int
+        var height: Int
+        var mimeType: String
+        var data: [UInt8]
+    }
+
     struct Mesh {
         var positions: [SIMD3<Float>]
         var normals: [SIMD3<Float>]?
         var indices: [UInt32]
         var colors: [SIMD3<UInt8>]?
+        /// Texture coordinates, when a colour texture has been baked.
+        var uvs: [SIMD2<Float>]?
+        /// The baked colour texture. Present only together with `uvs`.
+        var texture: TextureImage?
     }
 
     struct PointCloud {

@@ -123,6 +123,60 @@ final class ProjectStore: ObservableObject {
 
     func update(_ project: CaptureProject) { add(project) }
 
+    /// Transition a project's processing state without re-reading it.
+    ///
+    /// The state enum has carried `processing`/`processed`/`failed` since they
+    /// were introduced, but nothing ever wrote them. The process-once workflow
+    /// is what finally uses the chips and filters they power.
+    func setState(_ state: CaptureProject.State, for project: CaptureProject) {
+        guard let index = projects.firstIndex(where: { $0.id == project.id }) else { return }
+        guard projects[index].state != state else { return }
+        projects[index].state = state
+        save()
+    }
+
+    /// Copy a project — capture and any processed result — under a new identity.
+    ///
+    /// This is how a scanned and edited result becomes a new independent
+    /// project: edit the original, save, duplicate, and export from the copy
+    /// while the original stays intact.
+    @discardableResult
+    func duplicate(_ project: CaptureProject) -> CaptureProject? {
+        let newID = UUID().uuidString
+        let newURL = CaptureWriter.projectsDirectory
+            .appendingPathComponent("\(newID).\(BundleFormat.directoryExtension)")
+        do {
+            try FileManager.default.copyItem(at: project.url, to: newURL)
+            // The manifest carries the id, and the manifest is what recovery
+            // reads when the index is lost. Two directories with the same
+            // manifest id would collapse into one entry on recovery, so the
+            // copy's manifest gets the copy's id.
+            let manifestURL = newURL.appendingPathComponent("manifest.json")
+            if let data = try? Data(contentsOf: manifestURL),
+               var manifest = try? JSONDecoder().decode(CaptureManifest.self, from: data) {
+                manifest.id = newID
+                if let encoded = try? JSONEncoder().encode(manifest) {
+                    try? encoded.write(to: manifestURL)
+                }
+            }
+        } catch {
+            return nil
+        }
+        let copy = CaptureProject(
+            id: newID,
+            name: "\(project.name) copy",
+            url: newURL,
+            capturedAt: project.capturedAt,
+            frameCount: project.frameCount,
+            hasDepth: project.hasDepth,
+            state: project.state,
+            registrationRms: project.registrationRms,
+            scanMode: project.scanMode
+        )
+        add(copy)
+        return copy
+    }
+
     func delete(_ project: CaptureProject) {
         try? FileManager.default.removeItem(at: project.url)
         projects.removeAll { $0.id == project.id }

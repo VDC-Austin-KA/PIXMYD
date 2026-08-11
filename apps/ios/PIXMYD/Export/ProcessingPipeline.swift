@@ -65,7 +65,10 @@ final class ProcessingPipeline: ObservableObject {
         format: ExportFormat,
         quality: Quality,
         cleanup: Cleanup = .standard,
-        reviewFirst: Bool = false
+        reviewFirst: Bool = false,
+        /// Bypass the saved-result cache. Reproducing a result the user has
+        /// decided is wrong has to be possible without changing a setting.
+        reprocess: Bool = false
     ) {
         task?.cancel()
         state = .running(stage: "Reading capture", fraction: 0)
@@ -73,12 +76,48 @@ final class ProcessingPipeline: ObservableObject {
         task = Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             do {
+                // A processed result that matches the requested settings is
+                // never rebuilt. Fusion is the minutes-long half of export,
+                // and it has already happened for this combination of
+                // settings — redoing it would make the saved-result workflow
+                // pointless.
+                if !reprocess,
+                   let cached = Self.cachedResult(
+                       project: project, format: format, quality: quality, cleanup: cleanup
+                   ) {
+                    let summary = Self.summary(for: cached.meta, cached: true)
+                    let url = Self.exportURL(for: project, format: format)
+
+                    if reviewFirst && format.kind == .mesh {
+                        await MainActor.run {
+                            self.reviewMesh = cached.mesh
+                            self.state = .reviewing(summary: summary)
+                        }
+                    } else if format.kind == .mesh {
+                        try Self.writeMesh(
+                            cached.mesh, format: format, to: url,
+                            project: project, quality: quality, integrated: cached.meta.integratedFrames
+                        )
+                        await MainActor.run { self.state = .finished(url: url, summary: summary) }
+                    } else {
+                        guard let points = cached.points else {
+                            throw ProcessingError.emptyResult(
+                                "The saved result has no point cloud. Re-process with a "
+                                    + "point-cloud format to save one."
+                            )
+                        }
+                        try Self.writePoints(points, format: format, to: url)
+                        await MainActor.run { self.state = .finished(url: url, summary: summary) }
+                    }
+                    return
+                }
+
                 let outcome = try await Self.process(
                     project: project,
                     format: format,
                     quality: quality,
                     cleanup: cleanup,
-                    reviewFirst: reviewFirst
+                    reviewFirst: reviewFirst && !reprocess
                 ) { stage, fraction in
                     await MainActor.run {
                         self.state = .running(stage: stage, fraction: fraction)
@@ -133,6 +172,49 @@ final class ProcessingPipeline: ObservableObject {
                 await MainActor.run { self.state = .failed(error.localizedDescription) }
             }
         }
+    }
+
+    /// Persist the user's edits back into the project's saved result.
+    ///
+    /// The alternative design — edits living only in the viewer until the file
+    /// is written — is how this used to work, and it threw the edit away the
+    /// moment the viewer closed. Saving means a scan is processed once, edited
+    /// as many times as it needs, and only *then* copied or exported.
+    func saveReviewed(mesh: TsdfVolume.Mesh, project: CaptureProject) {
+        do {
+            try ProcessedArtifact.replaceMesh(mesh, in: project.url)
+        } catch {
+            state = .failed("Could not save edits: \(error.localizedDescription)")
+        }
+    }
+
+    /// The saved result, when it exists and was made with the exact settings
+    /// being requested. A result made at the wrong detail level is not "good
+    /// enough" — it is the wrong deliverable — so settings must match.
+    nonisolated private static func cachedResult(
+        project: CaptureProject,
+        format: ExportFormat,
+        quality: Quality,
+        cleanup: Cleanup
+    ) -> (mesh: TsdfVolume.Mesh, points: TsdfVolume.PointCloud?, meta: ProcessedMeta)? {
+        guard let artifact = try? ProcessedArtifact.load(in: project.url) else { return nil }
+        guard artifact.meta.matches(quality: quality, cleanup: cleanup) else { return nil }
+        switch format.kind {
+        case .mesh where artifact.meta.meshTriangles > 0: return artifact
+        case .points, .either where artifact.meta.pointsCount > 0: return artifact
+        default: return nil
+        }
+    }
+
+    nonisolated private static func summary(for meta: ProcessedMeta, cached: Bool) -> String {
+        let contents = meta.meshTriangles > 0
+            ? "\(meta.meshVertices) vertices, \(meta.meshTriangles) triangles"
+            : "\(meta.pointsCount) points"
+        let stem = "\(contents), \(Int(meta.voxelSize * 1000)) mm voxels, "
+            + "fused from \(meta.integratedFrames) frames."
+        return cached
+            ? stem + " Saved result reused — processing was not repeated."
+            : stem
     }
 
     // MARK: - Work
@@ -240,6 +322,7 @@ final class ProcessingPipeline: ObservableObject {
             frames.append(frame)
         }
         guard !frames.isEmpty else { throw CaptureError.noFrames }
+        let started = Date()
 
         // --- fuse ---
         // A scan of a valve and a scan of a warehouse bay want different depth
@@ -362,6 +445,17 @@ final class ProcessingPipeline: ObservableObject {
                 + "\(quality.voxelSize * 1000) mm voxels"
                 + (mesh.colors == nil ? "." : ", coloured from \(integrated) frames.")
 
+            // Persist the result before it is handed over, so an export or a
+            // second look never rebuilds it. Edits made in the review viewer
+            // are saved back on top of this.
+            let cloud = volume.extractPoints()
+            try? saveArtifact(
+                mesh: mesh, points: cloud, integrated: integrated,
+                mode: mode, quality: quality, cleanup: cleanup,
+                processingSeconds: Date().timeIntervalSince(started),
+                in: project
+            )
+
             // Hand the mesh back unwritten when the user asked to look first.
             if reviewFirst { return .mesh(mesh, summary) }
 
@@ -376,32 +470,81 @@ final class ProcessingPipeline: ObservableObject {
             guard !cloud.positions.isEmpty else {
                 throw ProcessingError.emptyResult("Fusion produced no points.")
             }
-            await progress("Writing \(format.title)", 0.9)
-            let positions = cloud.positions.map { SIMD3<Double>(Double($0.x), Double($0.y), Double($0.z)) }
-            switch format {
-            case .las:
-                try Exporters.writeLas(
-                    positions: positions, colors: cloud.colors, origin: .zero, to: url
-                )
-            case .e57:
-                // The E57 writer lives in the shared TypeScript package and is
-                // not yet ported to Swift, so on device the honest move is to
-                // say so rather than quietly hand back a PLY named .e57.
-                throw ProcessingError.notImplemented(
-                    "E57 export runs in the studio, not on the phone. Export PLY or LAS "
-                        + "here, or open the capture in the studio for E57."
-                )
-            default:
-                try Exporters.writePointCloudPly(
-                    positions: positions, colors: cloud.colors, to: url
-                )
-            }
             summary = "\(cloud.positions.count) points, \(quality.voxelSize * 1000) mm voxels, "
                 + "fused from \(integrated) depth frames."
+
+            try? saveArtifact(
+                mesh: nil, points: cloud, integrated: integrated,
+                mode: mode, quality: quality, cleanup: cleanup,
+                processingSeconds: Date().timeIntervalSince(started),
+                in: project
+            )
+
+            await progress("Writing \(format.title)", 0.9)
+            try writePoints(cloud, format: format, to: url)
         }
 
         await progress("Done", 1)
         return .file(url, summary)
+    }
+
+    /// Write a fused point cloud. Shared by the straight-to-file path and the
+    /// saved-result path so they cannot drift.
+    nonisolated private static func writePoints(
+        _ cloud: TsdfVolume.PointCloud, format: ExportFormat, to url: URL
+    ) throws {
+        let positions = cloud.positions.map { SIMD3<Double>(Double($0.x), Double($0.y), Double($0.z)) }
+        switch format {
+        case .las:
+            try Exporters.writeLas(
+                positions: positions, colors: cloud.colors, origin: .zero, to: url
+            )
+        case .e57:
+            // The E57 writer lives in the shared TypeScript package and is
+            // not yet ported to Swift, so on device the honest move is to
+            // say so rather than quietly hand back a PLY named .e57.
+            throw ProcessingError.notImplemented(
+                "E57 export runs in the studio, not on the phone. Export PLY or LAS "
+                    + "here, or open the capture in the studio for E57."
+            )
+        default:
+            try Exporters.writePointCloudPly(
+                positions: positions, colors: cloud.colors, to: url
+            )
+        }
+    }
+
+    /// Persist a fused result under the project directory. Failure to save is
+    /// not an export failure — the file is still written — so this is best
+    /// effort and the caller ignores the result.
+    nonisolated private static func saveArtifact(
+        mesh: TsdfVolume.Mesh?,
+        points: TsdfVolume.PointCloud,
+        integrated: Int,
+        mode: ScanMode,
+        quality: Quality,
+        cleanup: Cleanup,
+        processingSeconds: Double,
+        in project: CaptureProject
+    ) {
+        let meta = ProcessedMeta(
+            voxelSize: quality.voxelSize,
+            keepFraction: cleanup.keepFraction,
+            noiseExtentInVoxels: cleanup.noiseExtentInVoxels,
+            integratedFrames: integrated,
+            scanMode: mode.rawValue,
+            meshVertices: mesh?.positions.count ?? 0,
+            meshTriangles: (mesh?.indices.count ?? 0) / 3,
+            pointsCount: points.positions.count,
+            processingSeconds: processingSeconds,
+            createdAt: Date()
+        )
+        try? ProcessedArtifact.save(
+            mesh: mesh ?? TsdfVolume.Mesh(positions: [], normals: nil, indices: [], colors: nil),
+            points: points,
+            meta: meta,
+            in: project.url
+        )
     }
 
     // MARK: - Loading

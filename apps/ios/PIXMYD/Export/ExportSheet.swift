@@ -10,6 +10,7 @@ struct ExportSheet: View {
     let project: CaptureProject
 
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var store: ProjectStore
     @StateObject private var processor = ProcessingPipeline()
     @State private var format: ExportFormat = .glb
     @State private var quality: ProcessingPipeline.Quality = .balanced
@@ -79,6 +80,20 @@ struct ExportSheet: View {
                             integratedFrames: project.frameCount
                         )
                     }
+                }
+            }
+            .onChange(of: processor.state) { _, newState in
+                // The project list shows whether a capture ever got processed,
+                // so the sheet reports its outcome back to the store.
+                switch newState {
+                case .running:
+                    store.setState(.processing, for: project)
+                case .finished:
+                    store.setState(.processed, for: project)
+                case .failed:
+                    store.setState(.failed, for: project)
+                default:
+                    break
                 }
             }
         }

@@ -29,6 +29,8 @@ let portableSources = [
     "Export/TsdfVolume.swift",
     "Export/MeshSimplify.swift",
     "Export/MeshEditing.swift",
+    "Export/MeshArchive.swift",
+    "Export/ProcessedArtifact.swift",
     "Export/WebPageExport.swift",
     "RTK/NmeaAssembler.swift",
 ]
@@ -38,7 +40,6 @@ let portableSources = [
 // SwiftPM cannot, because the frameworks do not exist off Apple platforms.
 let unportableFiles = [
     "Info.plist",
-    "PIXMYD.entitlements",
     "Account/AccountView.swift",
     "App/PIXMYDApp.swift",
     "Capture/ARSessionController.swift",
@@ -46,9 +47,12 @@ let unportableFiles = [
     "Capture/CaptureView.swift",
     "Capture/CaptureWriter.swift",
     "Capture/LivePointCloudView.swift",
+    "Capture/SceneMeshOverlay.swift",
     "Design/Theme.swift",
     "Export/ExportSheet.swift",
+    "Export/ModelViewer.swift",
     "Export/ProcessingPipeline.swift",
+    "Export/SceneMeshView.swift",
     "Projects/ProjectStore.swift",
     "Projects/ProjectsView.swift",
     "RTK/GnssManager.swift",

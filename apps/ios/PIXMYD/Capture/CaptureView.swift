@@ -16,6 +16,7 @@ struct CaptureView: View {
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var projects: ProjectStore
     @EnvironmentObject private var survey: SurveyStore
+    @EnvironmentObject private var router: AppRouter
 
     @StateObject private var controller = ARSessionController()
 
@@ -71,6 +72,13 @@ struct CaptureView: View {
                 onDiscard: {
                     if let pendingProject { projects.delete(pendingProject) }
                     pendingProject = nil
+                },
+                onKeepAndReview: { name in
+                    guard let pendingProject else { return }
+                    let kept = pendingProject.renamed(to: name)
+                    projects.add(kept)
+                    self.pendingProject = nil
+                    router.open(kept, autoReview: true)
                 }
             )
         }
