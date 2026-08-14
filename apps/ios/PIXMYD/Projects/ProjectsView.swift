@@ -347,9 +347,8 @@ struct ProjectDetailView: View {
 /// Construction tolerance bands, mirroring `classifyAccuracy` in
 /// `packages/geo/src/registration.ts`. The wording is deliberately the same on
 /// both sides so a number means the same thing on the phone and in the studio.
-enum AccuracyBand {
-    case layout, penetrations, dimensionalControl, coordination, context, unusable
-
+/// The cases themselves live with the registration code in `Geo/Registration.swift`.
+extension AccuracyBand {
     static func of(_ rms: Double) -> AccuracyBand {
         guard rms.isFinite, rms >= 0 else { return .unusable }
         if rms <= 0.003 { return .layout }
