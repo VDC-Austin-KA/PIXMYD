@@ -1,5 +1,7 @@
 import ARKit
+import SceneKit
 import SwiftUI
+import UIKit
 
 // Locating a known point in the real world, so the capture frame and the model
 // frame can be tied together.
@@ -210,7 +212,16 @@ private struct MarkerAlignContainer: UIViewRepresentable {
             self.aligner = aligner
         }
 
+        /// SceneKit calls this on its own render thread, and everything the
+        /// sample needs -- `view.bounds`, `raycastQuery(from:)` -- is UIKit and
+        /// main-thread-only. So this hop is not defensive tidying; reading a
+        /// view's bounds from the render thread is the kind of race that works
+        /// on a desk and tears on a phone under load.
         func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
+            DispatchQueue.main.async { [weak self] in self?.sample() }
+        }
+
+        private func sample() {
             guard let view, let frame = view.session.currentFrame else { return }
             let centre = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
 
@@ -236,10 +247,8 @@ private struct MarkerAlignContainer: UIViewRepresentable {
                 }
             }
 
-            let tracking = frame.camera.trackingState
-            let resolved = target
-            Task { @MainActor [aligner] in
-                aligner.update(target: resolved, tracking: tracking)
+            MainActor.assumeIsolated {
+                aligner.update(target: target, tracking: frame.camera.trackingState)
             }
         }
     }

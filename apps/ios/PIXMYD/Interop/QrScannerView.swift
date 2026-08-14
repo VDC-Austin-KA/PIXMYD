@@ -71,7 +71,13 @@ final class QrScannerController: UIViewController, AVCaptureMetadataOutputObject
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         preview?.frame = view.bounds
-        preview?.connection?.videoOrientation = currentOrientation
+        // videoRotationAngle rather than the videoOrientation that every
+        // example still uses: the latter is deprecated from iOS 17, which is
+        // this app's deployment target, and a deprecation warning has failed
+        // this project's build before.
+        if let connection = preview?.connection, connection.isVideoRotationAngleSupported(currentRotation) {
+            connection.videoRotationAngle = currentRotation
+        }
     }
 
     private func configure() {
@@ -129,12 +135,13 @@ final class QrScannerController: UIViewController, AVCaptureMetadataOutputObject
         DispatchQueue.global(qos: .userInitiated).async { session.startRunning() }
     }
 
-    private var currentOrientation: AVCaptureVideoOrientation {
+    /// Degrees counter-clockwise from the sensor's natural orientation.
+    private var currentRotation: CGFloat {
         switch view.window?.windowScene?.interfaceOrientation {
-        case .landscapeLeft:      return .landscapeLeft
-        case .landscapeRight:     return .landscapeRight
-        case .portraitUpsideDown: return .portraitUpsideDown
-        default:                  return .portrait
+        case .landscapeLeft:      return 180
+        case .landscapeRight:     return 0
+        case .portraitUpsideDown: return 270
+        default:                  return 90
         }
     }
 

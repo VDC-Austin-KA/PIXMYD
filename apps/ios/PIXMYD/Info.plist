@@ -44,7 +44,30 @@
   <key>NSPhotoLibraryAddUsageDescription</key>
   <string>PIXMYD saves exported models and point clouds to your photo library when you ask it to.</string>
   <key>NSLocalNetworkUsageDescription</key>
-  <string>PIXMYD reaches an NTRIP caster on your network to fetch RTK corrections.</string>
+  <string>PIXMYD reaches an NTRIP caster for RTK corrections, and transfers point sets and scans to and from PIXMYD-Nav on a workstation you scan a code from. Both are connections you start.</string>
+
+  <!--
+    App Transport Security blocks plain HTTP from the URL loading system, and
+    the transfer session is plain HTTP to a private address on the site wifi.
+
+    NSAllowsLocalNetworking is the narrow exception for exactly that: it permits
+    insecure loads to local-network hosts and leaves ATS enforced for everything
+    else. NSAllowsArbitraryLoads would also work and would be wrong: it turns
+    the protection off for the whole app to fix one link-local case.
+
+    A certificate is not the alternative. The host is a Navisworks plugin on a
+    DHCP address with no name and no CA, so it could only offer a self-signed
+    one, and training people to tap through a TLS warning buys nothing against
+    an attacker already on the wifi. The session token is the control.
+
+    RTK never needed this: NtripClient is a raw NWConnection, and ATS only
+    applies to URLSession.
+  -->
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+  </dict>
 
   <key>UIFileSharingEnabled</key>
   <true/>
