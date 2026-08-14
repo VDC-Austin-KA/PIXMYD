@@ -105,11 +105,16 @@ enum CaptureUpload {
 
     private static func hardwareIdentifier() -> String {
         var info = utsname()
-        uname(&info)
-        let identifier = withUnsafePointer(to: &info.machine) { pointer in
-            pointer.withMemoryRebound(to: CChar.self, capacity: MemoryLayout.size(ofValue: info.machine)) {
-                String(validatingUTF8: $0) ?? ""
-            }
+        guard uname(&info) == 0 else { return UIDevice.current.model }
+
+        // `withUnsafeBytes` rather than the `withUnsafePointer` +
+        // `withMemoryRebound(to:capacity:)` spelling every example uses: that
+        // one passes `MemoryLayout.size(ofValue: info.machine)` as the
+        // capacity, which reads `info.machine` inside a closure that already
+        // holds it exclusively. Swift rejects the overlapping access, and the
+        // buffer here carries its own count so nothing needs to ask.
+        let identifier = withUnsafeBytes(of: &info.machine) { raw in
+            String(decoding: raw.prefix { $0 != 0 }, as: UTF8.self)
         }
         return identifier.isEmpty ? UIDevice.current.model : identifier
     }

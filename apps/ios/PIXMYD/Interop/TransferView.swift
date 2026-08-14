@@ -314,7 +314,7 @@ struct CaptureSendBody: View {
                     .fixedSize(horizontal: false, vertical: true)
 
             case let .failure(error)?:
-                Text("\(error)")
+                Text(String(describing: error))
                     .font(Theme.Typeface.caption)
                     .foregroundStyle(Theme.Palette.caution)
                     .fixedSize(horizontal: false, vertical: true)

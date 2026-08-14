@@ -132,7 +132,7 @@ struct SiteBundleView: View {
             case let .failure(error)?:
                 // The solver's own wording. "Needs at least 3 points" is
                 // actionable; "alignment failed" is not.
-                Text("\(error)")
+                Text(String(describing: error))
                     .font(Theme.Typeface.caption)
                     .foregroundStyle(Theme.Palette.caution)
                     .fixedSize(horizontal: false, vertical: true)
