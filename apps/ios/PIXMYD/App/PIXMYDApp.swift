@@ -7,6 +7,7 @@ struct PIXMYDApp: App {
     @StateObject private var settings = AppSettings()
     @StateObject private var survey = SurveyStore()
     @StateObject private var router = AppRouter()
+    @StateObject private var site = SiteStore()
 
     var body: some Scene {
         WindowGroup {
@@ -16,6 +17,7 @@ struct PIXMYDApp: App {
                 .environmentObject(settings)
                 .environmentObject(survey)
                 .environmentObject(router)
+                .environmentObject(site)
                 .preferredColorScheme(.dark)
                 .tint(Theme.Palette.accent)
         }
@@ -56,7 +58,7 @@ final class AppRouter: ObservableObject {
     }
 }
 
-/// Four tabs: Capture, Projects, Survey, Account.
+/// Five tabs: Capture, Projects, Site, Survey, Account.
 ///
 /// Capture is first and is the default, because the overwhelmingly common
 /// reason to open this app is that the user is already standing in front of the
@@ -66,7 +68,7 @@ struct RootView: View {
     @EnvironmentObject private var router: AppRouter
 
     enum Tab: Hashable {
-        case capture, projects, survey, account
+        case capture, projects, site, survey, account
     }
 
     var body: some View {
@@ -78,6 +80,10 @@ struct RootView: View {
             ProjectsView()
                 .tabItem { Label("Projects", systemImage: "square.stack.3d.up") }
                 .tag(Tab.projects)
+
+            SiteView()
+                .tabItem { Label("Site", systemImage: "building.2") }
+                .tag(Tab.site)
 
             SurveyView()
                 .tabItem { Label("Survey", systemImage: "mappin.and.ellipse") }
