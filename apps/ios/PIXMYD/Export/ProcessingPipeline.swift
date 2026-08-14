@@ -201,7 +201,8 @@ final class ProcessingPipeline: ObservableObject {
         guard artifact.meta.matches(quality: quality, cleanup: cleanup) else { return nil }
         switch format.kind {
         case .mesh where artifact.meta.meshTriangles > 0: return artifact
-        case .points, .either where artifact.meta.pointsCount > 0: return artifact
+        case .points where artifact.meta.pointsCount > 0,
+             .either where artifact.meta.pointsCount > 0: return artifact
         default: return nil
         }
     }
@@ -449,7 +450,7 @@ final class ProcessingPipeline: ObservableObject {
             // second look never rebuilds it. Edits made in the review viewer
             // are saved back on top of this.
             let cloud = volume.extractPoints()
-            try? saveArtifact(
+            saveArtifact(
                 mesh: mesh, points: cloud, integrated: integrated,
                 mode: mode, quality: quality, cleanup: cleanup,
                 processingSeconds: Date().timeIntervalSince(started),
@@ -473,7 +474,7 @@ final class ProcessingPipeline: ObservableObject {
             summary = "\(cloud.positions.count) points, \(quality.voxelSize * 1000) mm voxels, "
                 + "fused from \(integrated) depth frames."
 
-            try? saveArtifact(
+            saveArtifact(
                 mesh: nil, points: cloud, integrated: integrated,
                 mode: mode, quality: quality, cleanup: cleanup,
                 processingSeconds: Date().timeIntervalSince(started),
