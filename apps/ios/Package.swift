@@ -25,6 +25,7 @@ let portableSources = [
     "Model/ScanMode.swift",
     "Model/CaptureSettings.swift",
     "Model/ProcessingPresets.swift",
+    "Geo/Registration.swift",
     "Export/Exporters.swift",
     "Export/TsdfVolume.swift",
     "Export/MeshSimplify.swift",
