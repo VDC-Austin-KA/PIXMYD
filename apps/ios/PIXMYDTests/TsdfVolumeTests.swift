@@ -297,6 +297,67 @@ final class TsdfVolumeTests: XCTestCase {
         XCTAssertGreaterThan(openEdgeCount(mesh), 0, "an unobserved region was capped")
     }
 
+    // MARK: - Colour
+
+    func testColourIsFusedFromFrames() {
+        let camera = SyntheticCamera()
+        let volume = TsdfVolume(voxelSize: 0.02)
+        let planeZ: Float = 1.0
+
+        var depth = [Float](repeating: 0, count: camera.width * camera.height)
+        var rgba = [UInt8](repeating: 0, count: camera.width * camera.height * 4)
+        for i in 0..<(camera.width * camera.height) {
+            depth[i] = planeZ
+            rgba[i * 4] = 200
+            rgba[i * 4 + 1] = 50
+            rgba[i * 4 + 2] = 30
+            rgba[i * 4 + 3] = 255
+        }
+
+        volume.integrate(
+            depth: depth, confidence: nil,
+            width: camera.width, height: camera.height,
+            camera: camera.model,
+            pose: pose(.zero, simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)),
+            color: rgba, colorWidth: camera.width, colorHeight: camera.height,
+            colorCamera: camera.model
+        )
+
+        let mesh = volume.extractSurface()
+        XCTAssertGreaterThan(mesh.indices.count / 3, 0)
+        XCTAssertEqual(mesh.colors?.count, mesh.positions.count)
+        for c in mesh.colors ?? [] {
+            XCTAssertLessThanOrEqual(abs(Int(c.x) - 200), 3, "red channel drifts")
+            XCTAssertLessThanOrEqual(abs(Int(c.y) - 50), 3, "green channel drifts")
+            XCTAssertLessThanOrEqual(abs(Int(c.z) - 30), 3, "blue channel drifts")
+        }
+
+        let cloud = volume.extractPoints()
+        XCTAssertEqual(cloud.colors?.count, cloud.positions.count)
+        for c in cloud.colors ?? [] {
+            XCTAssertLessThanOrEqual(abs(Int(c.x) - 200), 3, "red channel drifts")
+            XCTAssertLessThanOrEqual(abs(Int(c.y) - 50), 3, "green channel drifts")
+            XCTAssertLessThanOrEqual(abs(Int(c.z) - 30), 3, "blue channel drifts")
+        }
+    }
+
+    func testUncolouredFramesProduceNoVertexColours() {
+        let camera = SyntheticCamera()
+        let volume = TsdfVolume(voxelSize: 0.02)
+        let depth = [Float](repeating: 1.0, count: camera.width * camera.height)
+
+        volume.integrate(
+            depth: depth, confidence: nil,
+            width: camera.width, height: camera.height,
+            camera: camera.model,
+            pose: pose(.zero, simd_quatf(ix: 0, iy: 0, iz: 0, r: 1))
+        )
+
+        XCTAssertFalse(volume.extractSurface().indices.isEmpty)
+        XCTAssertNil(volume.extractSurface().colors)
+        XCTAssertNil(volume.extractPoints().colors)
+    }
+
     // MARK: - Rejection rules
 
     func testDepthOutsideTheSensorRangeIsDiscarded() {

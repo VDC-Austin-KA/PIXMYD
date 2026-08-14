@@ -87,14 +87,9 @@ actor CaptureWriter {
             notes: nil
         )
 
-        func openAppend(_ name: String) throws -> FileHandle {
-            let url = root.appendingPathComponent(name)
-            fm.createFile(atPath: url.path, contents: nil)
-            return try FileHandle(forWritingTo: url)
-        }
-        framesHandle = try openAppend("frames.jsonl")
-        imuHandle = try openAppend("imu.jsonl")
-        gnssHandle = try openAppend("gnss.jsonl")
+        framesHandle = try Self.openAppend(named: "frames.jsonl", in: root)
+        imuHandle = try Self.openAppend(named: "imu.jsonl", in: root)
+        gnssHandle = try Self.openAppend(named: "gnss.jsonl", in: root)
 
         // Exclude from iCloud backup. A 4 GB scan silently consuming somebody's
         // iCloud quota is a bad surprise, and the deliverable is the export.
@@ -109,6 +104,14 @@ actor CaptureWriter {
         let directory = base.appendingPathComponent("Projects", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
+    }
+
+    /// Opens a newline-delimited JSON log for appending. A static helper rather
+    /// than a local closure so it never captures `self` mid-initialization.
+    private static func openAppend(named name: String, in root: URL) throws -> FileHandle {
+        let url = root.appendingPathComponent(name)
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        return try FileHandle(forWritingTo: url)
     }
 
     // MARK: - Appending
@@ -406,51 +409,3 @@ actor CaptureWriter {
     }
 }
 
-// MARK: - Capture settings
-
-struct CaptureSettings: Equatable, Codable {
-    /// Requested image overlap, 0-1. Drives the baseline gate.
-    var overlap: Double = 0.9
-    /// Assumed distance to the subject, metres. With overlap this determines
-    /// how far the camera must move before a frame carries new information.
-    var subjectDistance: Double = 2.0
-    /// Radians of rotation that force a keyframe regardless of baseline.
-    var rotationThreshold: Double = 0.13 // ~7.5 degrees
-    var trigger: Trigger = .automatic
-    var saveVideo = false
-
-    enum Trigger: String, Codable, CaseIterable, Identifiable {
-        case automatic, manual, timed
-        var id: String { rawValue }
-        var label: String {
-            switch self {
-            case .automatic: "Automatic"
-            case .manual: "Manual"
-            case .timed: "Timed"
-            }
-        }
-        var detail: String {
-            switch self {
-            case .automatic: "Captures when you have moved far enough to add detail."
-            case .manual: "Captures only when you tap. For deliberate, sparse coverage."
-            case .timed: "Captures at a fixed interval regardless of movement."
-            }
-        }
-    }
-
-    /// Metres the camera must travel before the next frame is kept.
-    ///
-    /// A camera at distance `d` with horizontal field of view `f` sees a strip
-    /// roughly `2 d tan(f/2)` wide. Requiring `overlap` between consecutive
-    /// frames means moving at most `(1 - overlap)` of that width. The 60-degree
-    /// figure is a reasonable stand-in for a phone's main camera; the exact
-    /// value matters less than the fact that the threshold scales with distance
-    /// rather than being a constant that is wrong at both ends.
-    var baseline: Float {
-        let halfFov = 30.0 * .pi / 180.0
-        let footprint = 2 * subjectDistance * tan(halfFov)
-        return Float(max(0.02, footprint * (1 - overlap)))
-    }
-
-    static let `default` = CaptureSettings()
-}

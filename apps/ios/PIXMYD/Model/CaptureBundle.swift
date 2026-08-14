@@ -226,7 +226,7 @@ struct ImuSample: Codable {
 
 // MARK: - Control
 
-struct ControlPoint: Codable, Identifiable, Equatable {
+struct ControlPoint: Codable, Identifiable, Hashable {
     var id: String
     /// Project coordinates, in the project CRS and units.
     var project: [Double]
@@ -236,7 +236,7 @@ struct ControlPoint: Codable, Identifiable, Equatable {
     var description: String?
     var sigma: Double?
 
-    enum Role: String, Codable {
+    enum Role: String, Codable, Hashable {
         /// Constrains the solve.
         case gcp
         /// Withheld from the solve and used to grade it.

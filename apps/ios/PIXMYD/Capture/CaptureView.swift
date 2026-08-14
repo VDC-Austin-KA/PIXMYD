@@ -16,10 +16,18 @@ struct CaptureView: View {
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var projects: ProjectStore
     @EnvironmentObject private var survey: SurveyStore
+    @EnvironmentObject private var router: AppRouter
 
     @StateObject private var controller = ARSessionController()
 
     @State private var showLivePreview = false
+    /// Live scene mesh, on by default.
+    ///
+    /// Coverage is the question someone is actually asking while they walk a
+    /// site — "have I got that corner?" — and until now the only way to answer
+    /// it was to finish, export, and look. Starting with it visible makes that
+    /// the normal way to scan rather than a setting to discover.
+    @State private var meshStyle: SceneMeshOverlay.Style? = .coverage
     @State private var showTools = false
     @State private var showSaveSheet = false
     @State private var showCancelConfirm = false
@@ -30,7 +38,7 @@ struct CaptureView: View {
     var body: some View {
         ZStack {
             if ARSessionController.isSupported {
-                ARViewContainer(session: controller.session)
+                ARViewContainer(session: controller.session, meshStyle: meshStyle)
                     .ignoresSafeArea()
 
                 if showLivePreview {
@@ -64,6 +72,13 @@ struct CaptureView: View {
                 onDiscard: {
                     if let pendingProject { projects.delete(pendingProject) }
                     pendingProject = nil
+                },
+                onKeepAndReview: { name in
+                    guard let pendingProject else { return }
+                    let kept = pendingProject.renamed(to: name)
+                    projects.add(kept)
+                    self.pendingProject = nil
+                    router.open(kept, autoReview: true)
                 }
             )
         }
@@ -107,6 +122,8 @@ struct CaptureView: View {
 
             trackingBadge
 
+            meshButton
+
             Button {
                 showTools = true
             } label: {
@@ -120,6 +137,43 @@ struct CaptureView: View {
             .accessibilityLabel("Tools")
         }
         .padding(.top, Theme.Metrics.gutterTight)
+    }
+
+    /// Cycles the live mesh: coverage wireframe, surface colours, off.
+    ///
+    /// A cycle rather than a menu because it is used mid-scan, one-handed,
+    /// while holding a phone at arm's length — three states are faster to step
+    /// through than to pick from.
+    private var meshButton: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                meshStyle = switch meshStyle {
+                case .coverage: .classification
+                case .classification: nil
+                case nil: .coverage
+                }
+            }
+        } label: {
+            Image(systemName: meshStyle == nil ? "grid" : "square.grid.3x3.fill")
+                .font(.system(size: 17, weight: .semibold))
+                .frame(width: Theme.Metrics.minimumTapTarget,
+                       height: Theme.Metrics.minimumTapTarget)
+                .foregroundStyle(meshStyle == nil ? Theme.Palette.textSecondary : Theme.Palette.text)
+                .background(.black.opacity(0.55), in: Circle())
+        }
+        .disabled(!ARSessionController.hasLiDAR)
+        .opacity(ARSessionController.hasLiDAR ? 1 : 0.35)
+        .accessibilityLabel(meshAccessibilityLabel)
+    }
+
+    /// A `switch` expression is only allowed in a return, a throw, or the right
+    /// side of an assignment — not inline as an argument.
+    private var meshAccessibilityLabel: String {
+        switch meshStyle {
+        case .coverage: return "Scene mesh: coverage. Tap for surface colours."
+        case .classification: return "Scene mesh: surfaces. Tap to hide."
+        case nil: return "Scene mesh hidden. Tap to show coverage."
+        }
     }
 
     private var trackingBadge: some View {
@@ -311,19 +365,28 @@ struct CaptureView: View {
 
 struct ARViewContainer: UIViewRepresentable {
     let session: ARSession
+    /// Nil draws no scene mesh at all.
+    var meshStyle: SceneMeshOverlay.Style?
+
+    func makeCoordinator() -> SceneMeshOverlay { SceneMeshOverlay() }
 
     func makeUIView(context: Context) -> ARSCNView {
         let view = ARSCNView()
         view.session = session
         view.automaticallyUpdatesLighting = true
         view.rendersContinuously = true
-        // No scene content — this is a viewfinder, not an AR scene. Overlays
-        // are drawn in SwiftUI on top, which keeps them legible and testable.
+        // The only scene content is the live mesh, added by the coordinator as
+        // ARKit reports anchors. Every other overlay is drawn in SwiftUI on
+        // top, which keeps them legible and testable.
         view.scene = SCNScene()
+        view.delegate = context.coordinator
         return view
     }
 
-    func updateUIView(_ view: ARSCNView, context: Context) {}
+    func updateUIView(_ view: ARSCNView, context: Context) {
+        context.coordinator.isEnabled = meshStyle != nil
+        if let meshStyle { context.coordinator.style = meshStyle }
+    }
 }
 
 // MARK: - Signal quality

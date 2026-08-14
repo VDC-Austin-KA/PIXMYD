@@ -12,6 +12,10 @@ struct CaptureProject: Identifiable, Hashable, Codable {
     var state: State
     /// Set once the capture has been fitted to control.
     var registrationRms: Double?
+    /// How this was captured, so processing can default to match. Optional
+    /// because projects recorded before modes existed do not have one, and
+    /// those decode as nil rather than failing to load at all.
+    var scanMode: ScanMode?
 
     enum State: String, Codable, CaseIterable, Identifiable {
         case captured, processing, processed, failed
@@ -119,6 +123,60 @@ final class ProjectStore: ObservableObject {
 
     func update(_ project: CaptureProject) { add(project) }
 
+    /// Transition a project's processing state without re-reading it.
+    ///
+    /// The state enum has carried `processing`/`processed`/`failed` since they
+    /// were introduced, but nothing ever wrote them. The process-once workflow
+    /// is what finally uses the chips and filters they power.
+    func setState(_ state: CaptureProject.State, for project: CaptureProject) {
+        guard let index = projects.firstIndex(where: { $0.id == project.id }) else { return }
+        guard projects[index].state != state else { return }
+        projects[index].state = state
+        save()
+    }
+
+    /// Copy a project — capture and any processed result — under a new identity.
+    ///
+    /// This is how a scanned and edited result becomes a new independent
+    /// project: edit the original, save, duplicate, and export from the copy
+    /// while the original stays intact.
+    @discardableResult
+    func duplicate(_ project: CaptureProject) -> CaptureProject? {
+        let newID = UUID().uuidString
+        let newURL = CaptureWriter.projectsDirectory
+            .appendingPathComponent("\(newID).\(BundleFormat.directoryExtension)")
+        do {
+            try FileManager.default.copyItem(at: project.url, to: newURL)
+            // The manifest carries the id, and the manifest is what recovery
+            // reads when the index is lost. Two directories with the same
+            // manifest id would collapse into one entry on recovery, so the
+            // copy's manifest gets the copy's id.
+            let manifestURL = newURL.appendingPathComponent("manifest.json")
+            if let data = try? Data(contentsOf: manifestURL),
+               var manifest = try? JSONDecoder().decode(CaptureManifest.self, from: data) {
+                manifest.id = newID
+                if let encoded = try? JSONEncoder().encode(manifest) {
+                    try? encoded.write(to: manifestURL)
+                }
+            }
+        } catch {
+            return nil
+        }
+        let copy = CaptureProject(
+            id: newID,
+            name: "\(project.name) copy",
+            url: newURL,
+            capturedAt: project.capturedAt,
+            frameCount: project.frameCount,
+            hasDepth: project.hasDepth,
+            state: project.state,
+            registrationRms: project.registrationRms,
+            scanMode: project.scanMode
+        )
+        add(copy)
+        return copy
+    }
+
     func delete(_ project: CaptureProject) {
         try? FileManager.default.removeItem(at: project.url)
         projects.removeAll { $0.id == project.id }
@@ -165,7 +223,7 @@ final class ProjectStore: ObservableObject {
 
         for url in contents where url.pathExtension == BundleFormat.directoryExtension {
             guard !known.contains(url.lastPathComponent) else { continue }
-            if let recovered = try? CaptureWriter.recover(at: url), let recovered {
+            if let recovered = try? CaptureWriter.recover(at: url) {
                 projects.append(recovered)
             } else if let project = Self.readManifest(at: url) {
                 projects.append(project)
@@ -174,7 +232,10 @@ final class ProjectStore: ObservableObject {
         save()
     }
 
-    private static func readManifest(at url: URL) -> CaptureProject? {
+    /// Reads and decodes a file, so there is no reason for it to be pinned to
+    /// the main thread — and a good reason not to be, if the project list ever
+    /// loads off it.
+    nonisolated private static func readManifest(at url: URL) -> CaptureProject? {
         let manifestURL = url.appendingPathComponent("manifest.json")
         guard let data = try? Data(contentsOf: manifestURL),
               let manifest = try? JSONDecoder().decode(CaptureManifest.self, from: data)

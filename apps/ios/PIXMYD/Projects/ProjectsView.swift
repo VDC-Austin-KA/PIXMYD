@@ -4,13 +4,14 @@ import SwiftUI
 /// The project list: search, filter, and a map of where captures were taken.
 struct ProjectsView: View {
     @EnvironmentObject private var store: ProjectStore
+    @EnvironmentObject private var router: AppRouter
     @State private var showMap = false
     @State private var selected: CaptureProject?
     @State private var renaming: CaptureProject?
     @State private var newName = ""
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $router.path) {
             VStack(spacing: 0) {
                 filterBar
 
@@ -45,7 +46,7 @@ struct ProjectsView: View {
             }
             .background(Theme.Palette.background)
             .navigationTitle("Projects")
-            .navigationDestination(for: CaptureProject.self) { ProjectDetailView(project: $0) }
+            .navigationDestination(for: CaptureProject.self) { ProjectDetailView(id: $0.id) }
             .searchable(text: $store.searchText, prompt: "Search projects")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -155,11 +156,34 @@ struct ProjectRow: View {
 // MARK: - Detail
 
 struct ProjectDetailView: View {
-    let project: CaptureProject
+    let id: String
     @EnvironmentObject private var store: ProjectStore
+    @EnvironmentObject private var router: AppRouter
+    @StateObject private var processor = ProcessingPipeline()
     @State private var showExport = false
 
+    private var project: CaptureProject? {
+        store.projects.first { $0.id == id }
+    }
+
     var body: some View {
+        Group {
+            if let project {
+                detail(project)
+            } else {
+                ContentUnavailableView(
+                    "Project not found",
+                    systemImage: "questionmark.folder",
+                    description: Text("It may have been deleted.")
+                )
+                .background(Theme.Palette.background)
+            }
+        }
+        .navigationTitle(project?.name ?? "")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func detail(_ project: CaptureProject) -> some View {
         ScrollView {
             VStack(spacing: Theme.Metrics.gutter) {
                 Panel(title: "Capture") {
@@ -202,18 +226,121 @@ struct ProjectDetailView: View {
                     }
                 }
 
-                FieldButton(title: "Export", systemImage: "square.and.arrow.up", role: .primary) {
-                    showExport = true
-                }
+                actions(project)
             }
             .padding(Theme.Metrics.gutter)
         }
         .background(Theme.Palette.background)
-        .navigationTitle(project.name)
-        .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showExport) {
             ExportSheet(project: project)
         }
+        .onChange(of: processor.state) { _, newState in
+            report(newState, for: project)
+        }
+        .onAppear {
+            if router.reviewRequest?.project.id == id {
+                router.clearReviewRequest(projectID: id)
+                viewProject(project)
+            }
+        }
+        .fullScreenCover(isPresented: reviewBinding) {
+            if let mesh = processor.reviewMesh {
+                ModelViewer(mesh: mesh) { edited in
+                    processor.saveReviewed(mesh: edited, project: project)
+                }
+            }
+        }
+    }
+
+    private func actions(_ project: CaptureProject) -> some View {
+        VStack(spacing: Theme.Metrics.gutterTight) {
+            HStack(spacing: Theme.Metrics.gutterTight) {
+                FieldButton(
+                    title: "View",
+                    systemImage: "eye.fill",
+                    role: project.state == .processing ? .secondary : .primary
+                ) {
+                    if project.state != .processing { viewProject(project) }
+                }
+                FieldButton(
+                    title: "Duplicate",
+                    systemImage: "plus.square.on.square",
+                    role: .secondary
+                ) {
+                    store.duplicate(project)
+                }
+            }
+
+            // A failed result is re-runnable, and a processed one can be
+            // rebuilt from the raw frames when the saved result is wrong.
+            if project.state == .failed || project.state == .processed {
+                FieldButton(title: "Reprocess", systemImage: "arrow.clockwise", role: .secondary) {
+                    processor.run(
+                        project: project,
+                        format: .glb,
+                        quality: matchingQuality(for: project),
+                        cleanup: .standard,
+                        reviewFirst: true,
+                        reprocess: true
+                    )
+                }
+            }
+
+            FieldButton(title: "Export", systemImage: "square.and.arrow.up", role: .primary) {
+                showExport = true
+            }
+        }
+    }
+
+    /// Open the result for inspection. If a result was already processed it
+    /// is reused; otherwise the capture is processed first.
+    private func viewProject(_ project: CaptureProject) {
+        processor.run(
+            project: project,
+            format: .glb,
+            quality: matchingQuality(for: project),
+            cleanup: .standard,
+            reviewFirst: true
+        )
+    }
+
+    private func matchingQuality(for project: CaptureProject) -> ProcessingPipeline.Quality {
+        if let mode = project.scanMode {
+            return ProcessingPipeline.Quality.matching(voxelSize: mode.voxelSize)
+        }
+        return .balanced
+    }
+
+    /// Keep the list's state chips honest. The pipeline is not visible from
+    /// the list, so it reports its progress back to the store instead.
+    private func report(_ newState: ProcessingPipeline.State, for project: CaptureProject) {
+        switch newState {
+        case .running:
+            store.setState(.processing, for: project)
+        case .finished:
+            store.setState(.processed, for: project)
+        case .failed:
+            store.setState(.failed, for: project)
+        default:
+            break
+        }
+    }
+
+    /// Presented from the pipeline's own state so the viewer cannot outlive
+    /// the processing run that produced it.
+    private var reviewBinding: Binding<Bool> {
+        Binding(
+            get: {
+                if case .reviewing = processor.state { return true }
+                return false
+            },
+            set: { presented in
+                if !presented, case .reviewing = processor.state {
+                    processor.cancel()
+                    if let project { store.setState(.processed, for: project) }
+                }
+            }
+        )
     }
 }
 

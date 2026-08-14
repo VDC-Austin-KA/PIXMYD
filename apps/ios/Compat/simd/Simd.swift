@@ -50,6 +50,42 @@ public func simd_dot(_ a: SIMD3<Float>, _ b: SIMD3<Float>) -> Float {
     a.x * b.x + a.y * b.y + a.z * b.z
 }
 
+// Double-precision overloads. Apple's simd has these too, so nothing here
+// diverges from the real module. Mesh decimation needs them: a quadric
+// accumulates squared distances over every plane meeting at a vertex, and in
+// float32 the sum of a few hundred of those loses the small errors that
+// distinguish "collapse across a flat wall" from "collapse across a corner" —
+// which is the entire signal the algorithm ranks on.
+
+@inlinable
+public func simd_length(_ v: SIMD3<Double>) -> Double {
+    (v.x * v.x + v.y * v.y + v.z * v.z).squareRoot()
+}
+
+@inlinable
+public func simd_distance(_ a: SIMD3<Double>, _ b: SIMD3<Double>) -> Double {
+    simd_length(a - b)
+}
+
+@inlinable
+public func simd_normalize(_ v: SIMD3<Double>) -> SIMD3<Double> {
+    v / simd_length(v)
+}
+
+@inlinable
+public func simd_cross(_ a: SIMD3<Double>, _ b: SIMD3<Double>) -> SIMD3<Double> {
+    SIMD3<Double>(
+        a.y * b.z - a.z * b.y,
+        a.z * b.x - a.x * b.z,
+        a.x * b.y - a.y * b.x
+    )
+}
+
+@inlinable
+public func simd_dot(_ a: SIMD3<Double>, _ b: SIMD3<Double>) -> Double {
+    a.x * b.x + a.y * b.y + a.z * b.z
+}
+
 // Generic over scalar type: the exporters take bounds over SIMD3<Double> world
 // coordinates and over SIMD3<Float> local ones, and Apple's simd_min/simd_max
 // are overloaded for both.

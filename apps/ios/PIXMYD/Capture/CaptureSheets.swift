@@ -169,6 +169,7 @@ struct SaveCaptureSheet: View {
     let project: CaptureProject?
     let onKeep: (String) -> Void
     let onDiscard: () -> Void
+    let onKeepAndReview: (String) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
@@ -219,6 +220,12 @@ struct SaveCaptureSheet: View {
                     FieldButton(title: "Keep capture", systemImage: "checkmark", role: .primary) {
                         onKeep(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                                ? (project?.name ?? "Capture") : name)
+                        dismiss()
+                    }
+
+                    FieldButton(title: "Keep & review", systemImage: "eye.fill", role: .secondary) {
+                        onKeepAndReview(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                        ? (project?.name ?? "Capture") : name)
                         dismiss()
                     }
 

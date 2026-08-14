@@ -122,8 +122,39 @@ struct AccountView: View {
 struct CaptureSettingsView: View {
     @EnvironmentObject private var settings: AppSettings
 
+    /// Selecting a mode writes its values into the individual settings, which
+    /// stay editable afterwards. A preset, not a lock.
+    private var modeBinding: Binding<ScanMode> {
+        Binding(
+            get: { settings.capture.mode },
+            set: { settings.capture.apply($0) }
+        )
+    }
+
     var body: some View {
         List {
+            Section {
+                Picker("Mode", selection: modeBinding) {
+                    ForEach(ScanMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Text(settings.capture.mode.detail)
+                    .font(Theme.Typeface.caption)
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                if !settings.capture.matchesMode {
+                    // Say so rather than showing a mode that no longer
+                    // describes what will happen.
+                    Text("Adjusted from the \(settings.capture.mode.label) preset.")
+                        .font(Theme.Typeface.caption)
+                        .foregroundStyle(Theme.Palette.caution)
+                }
+            } header: {
+                Text("What are you scanning")
+            }
+            .listRowBackground(Theme.Palette.surface)
+
             Section {
                 Picker("Trigger", selection: $settings.capture.trigger) {
                     ForEach(CaptureSettings.Trigger.allCases) { trigger in

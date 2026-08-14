@@ -62,12 +62,12 @@ final class ARSessionController: NSObject, ObservableObject {
     /// Not a nicety: without it there is no metric depth, reconstruction falls
     /// back to photogrammetry alone, and scale comes from VIO rather than from
     /// measurement. The UI says so rather than quietly degrading.
-    static var hasLiDAR: Bool {
+    nonisolated static var hasLiDAR: Bool {
         ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
             && ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)
     }
 
-    static var isSupported: Bool { ARWorldTrackingConfiguration.isSupported }
+    nonisolated static var isSupported: Bool { ARWorldTrackingConfiguration.isSupported }
 
     // MARK: - Internals
 
@@ -106,7 +106,15 @@ final class ARSessionController: NSObject, ObservableObject {
         config.planeDetection = []
 
         if Self.hasLiDAR {
-            config.sceneReconstruction = .mesh
+            // Classification costs a little extra on the Neural Engine and
+            // gives a per-face label — wall, floor, ceiling, table, seat,
+            // window, door — computed by ARKit whether or not it is asked for
+            // in this form. Taking the classified variant where it is available
+            // means semantics are free rather than a model to train.
+            config.sceneReconstruction =
+                ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification)
+                ? .meshWithClassification
+                : .mesh
             config.frameSemantics.insert(.sceneDepth)
             config.frameSemantics.insert(.smoothedSceneDepth)
         }
@@ -171,7 +179,11 @@ final class ARSessionController: NSObject, ObservableObject {
         isRecording = false
         isPaused = false
         self.writer = nil
-        return try await writer.finish()
+        var project = try await writer.finish()
+        // Record how it was captured, so export defaults to settings that
+        // match rather than to room-sized ones for a scan of a valve.
+        project.scanMode = settings.mode
+        return project
     }
 
     func cancelRecording() async {
@@ -384,7 +396,7 @@ extension ARSessionController: ARSessionDelegate {
         estimatedPointCount = capturedFrameCount * points.count
     }
 
-    private static func describe(_ state: ARCamera.TrackingState) -> TrackingState {
+    nonisolated private static func describe(_ state: ARCamera.TrackingState) -> TrackingState {
         switch state {
         case .normal:
             return .normal

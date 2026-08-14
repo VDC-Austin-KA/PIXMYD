@@ -22,10 +22,25 @@ import simd
 ///    lid is a measurement that was never taken.
 final class TsdfVolume {
 
+    /// A baked colour texture, in an encoded form a writer can embed directly.
+    /// `data` is PNG bytes; the encoder lives on Apple platforms, the writer
+    /// side of every exporter is portable.
+    struct TextureImage: Equatable, Sendable {
+        var width: Int
+        var height: Int
+        var mimeType: String
+        var data: [UInt8]
+    }
+
     struct Mesh {
         var positions: [SIMD3<Float>]
         var normals: [SIMD3<Float>]?
         var indices: [UInt32]
+        var colors: [SIMD3<UInt8>]?
+        /// Texture coordinates, when a colour texture has been baked.
+        var uvs: [SIMD2<Float>]?
+        /// The baked colour texture. Present only together with `uvs`.
+        var texture: TextureImage?
     }
 
     struct PointCloud {
@@ -40,6 +55,7 @@ final class TsdfVolume {
         var sdf = [Float](repeating: 0, count: TsdfVolume.blockVoxels)
         var weight = [Float](repeating: 0, count: TsdfVolume.blockVoxels)
         var color = [SIMD3<Float>](repeating: .zero, count: TsdfVolume.blockVoxels)
+        var colorWeight = [Float](repeating: 0, count: TsdfVolume.blockVoxels)
         let origin: SIMD3<Int32>
         init(origin: SIMD3<Int32>) { self.origin = origin }
     }
@@ -51,6 +67,8 @@ final class TsdfVolume {
     private let minConfidence: UInt8
 
     private var blocks: [Int: Block] = [:]
+    /// True once any voxel has been seen from a colour camera.
+    private(set) var hasColor = false
 
     init(voxelSize: Double, truncation: Double? = nil,
          minDepth: Float = 0.15, maxDepth: Float = 5.0, minConfidence: UInt8 = 1) {
@@ -77,7 +95,11 @@ final class TsdfVolume {
         width: Int,
         height: Int,
         camera: CameraModel.Pinhole,
-        pose: Pose
+        pose: Pose,
+        color: [UInt8]? = nil,
+        colorWidth: Int = 0,
+        colorHeight: Int = 0,
+        colorCamera: CameraModel.Pinhole? = nil
     ) {
         let rotation = simd_quatf(
             ix: Float(pose.q[0]), iy: Float(pose.q[1]),
@@ -91,6 +113,17 @@ final class TsdfVolume {
         let inverseVoxel = Float(1 / voxelSize)
         let step = Float(voxelSize) * 0.5
         let stepCount = Int((2 * trunc / step).rounded(.up))
+
+        let cfx = Float(colorCamera?.fx ?? 0), cfy = Float(colorCamera?.fy ?? 0)
+        let ccx = Float(colorCamera?.cx ?? 0), ccy = Float(colorCamera?.cy ?? 0)
+        let halfVoxel = Float(voxelSize) * 0.5
+        let colorPixels: [UInt8]?
+        if let color, colorCamera != nil, colorWidth > 0, colorHeight > 0,
+           color.count >= colorWidth * colorHeight * 4 {
+            colorPixels = color
+        } else {
+            colorPixels = nil
+        }
 
         for py in 0..<height {
             for px in 0..<width {
@@ -117,6 +150,24 @@ final class TsdfVolume {
                 let confidenceWeight = confidence.map { Float($0[i] + 1) / 3 } ?? 1
                 let weight = depthWeight * confidenceWeight
 
+                // How square-on this pixel sees the surface, from the depth map
+                // itself — two neighbouring depth samples give the local
+                // tangent plane, so this needs nothing the fusion did not
+                // already have.
+                //
+                // Colour quality falls off with incidence far faster than
+                // geometry does. At a glancing angle one texel is stretched
+                // across many pixels, motion blur is worst, and the lens is
+                // resolving least; the surface distance is still fine. Squaring
+                // the cosine makes a face-on view worth several oblique ones
+                // without ever discarding a region only ever seen obliquely,
+                // which a hard cutoff would leave grey.
+                let colorWeight = weight * incidenceCosine(
+                    depth: depth, index: i, x: px, y: py,
+                    width: width, height: height,
+                    fx: fx, fy: fy, cx: cx, cy: cy
+                )
+
                 for s in 0...stepCount {
                     let along = -trunc + Float(s) * step
                     let p = worldSurface + worldRay * along
@@ -134,13 +185,49 @@ final class TsdfVolume {
                     // of the surface, negative behind it.
                     let sdf = rayLength - simd_distance(centre, translation)
                     guard sdf >= -trunc else { continue }
-                    update(voxel: voxel, sdf: max(-1, min(1, sdf / trunc)), weight: weight)
+
+                    var voxelColor: SIMD3<Float>?
+                    if let colorPixels {
+                        // Occlusion: a voxel sitting more than half a voxel
+                        // behind the measured surface is hidden from this
+                        // camera, and colouring it would bleed the back wall
+                        // through the front one.
+                        let worldToCamera = simd_quatf(
+                            ix: -rotation.imag.x, iy: -rotation.imag.y,
+                            iz: -rotation.imag.z, r: rotation.real
+                        )
+                        let cameraSpace = worldToCamera.act(centre - translation)
+                        let u = min(max(cameraSpace.x * fx / cameraSpace.z + cx, 0), Float(width - 1))
+                        let v = min(max(cameraSpace.y * fy / cameraSpace.z + cy, 0), Float(height - 1))
+                        let observed = depth[Int(v) * width + Int(u)]
+                        if observed <= 0 || observed + halfVoxel >= cameraSpace.z {
+                            voxelColor = bilinearColor(
+                                colorPixels,
+                                u: cameraSpace.x * cfx / cameraSpace.z + ccx,
+                                v: cameraSpace.y * cfy / cameraSpace.z + ccy,
+                                width: colorWidth, height: colorHeight
+                            )
+                        }
+                    }
+                    update(
+                        voxel: voxel,
+                        sdf: max(-1, min(1, sdf / trunc)),
+                        weight: weight,
+                        color: voxelColor,
+                        colorWeight: colorWeight
+                    )
                 }
             }
         }
     }
 
-    private func update(voxel: SIMD3<Int32>, sdf: Float, weight: Float) {
+    private func update(
+        voxel: SIMD3<Int32>,
+        sdf: Float,
+        weight: Float,
+        color: SIMD3<Float>?,
+        colorWeight: Float
+    ) {
         let block = SIMD3<Int32>(
             Int32((Double(voxel.x) / 8).rounded(.down)),
             Int32((Double(voxel.y) / 8).rounded(.down)),
@@ -163,6 +250,80 @@ final class TsdfVolume {
         // Curless & Levoy's incremental weighted average.
         entry.sdf[index] = (entry.sdf[index] * w0 + sdf * weight) / w1
         entry.weight[index] = w1
+
+        // Colour carries its own weight. What makes a good *geometric*
+        // observation and what makes a good *colour* observation are different
+        // questions: a wall seen edge-on still measures its distance fine, but
+        // its colour is smeared across a few pixels at a glancing angle and
+        // should not outvote a square-on look at the same patch.
+        if let color, colorWeight > 0 {
+            let cw0 = entry.colorWeight[index]
+            let cw1 = cw0 + colorWeight
+            entry.color[index] = (entry.color[index] * cw0 + color * colorWeight) / cw1
+            entry.colorWeight[index] = cw1
+            hasColor = true
+        }
+    }
+
+    /// Squared cosine of the angle between the surface and the viewing ray at
+    /// one depth pixel, in 0...1. Face-on is 1, edge-on is 0.
+    ///
+    /// The normal comes from the depth map: unprojecting this pixel and its
+    /// right and lower neighbours gives two tangent vectors whose cross product
+    /// is the surface normal, all in camera space. That is three unprojections
+    /// per pixel and no extra buffers.
+    ///
+    /// Returns 1 — treat as face-on — wherever the estimate cannot be trusted:
+    /// at the last row or column, and across a depth discontinuity. At a jump
+    /// from a near object to a far wall the "tangent" spans the gap and the
+    /// normal points nowhere real. Guessing face-on there is the safe failure:
+    /// it weights the sample normally instead of silently dropping the colour of
+    /// every object edge in the scan.
+    private func incidenceCosine(
+        depth: [Float], index: Int, x: Int, y: Int,
+        width: Int, height: Int,
+        fx: Float, fy: Float, cx: Float, cy: Float
+    ) -> Float {
+        guard x + 1 < width, y + 1 < height else { return 1 }
+
+        let d = depth[index]
+        let dx = depth[index + 1]
+        let dy = depth[index + width]
+        guard dx > 0, dy > 0 else { return 1 }
+
+        // Tell a steep surface from an actual depth discontinuity.
+        //
+        // The depth step across one pixel on a surface at incidence θ is
+        // d·tan(θ)/f. Anything past about 80 degrees is not a surface this
+        // camera is measuring usefully, so that is the cutoff — steeper than
+        // that, or across an object edge, and the normal below is meaningless.
+        //
+        // A flat percentage was wrong here: 5% of range calls a wall seen at 72
+        // degrees a discontinuity and bails out reporting face-on, which
+        // over-weights exactly the glancing colour this is meant to demote.
+        let maximumStep = d * 5.67 / min(fx, fy) + 0.002
+        guard abs(dx - d) < maximumStep, abs(dy - d) < maximumStep else { return 1 }
+
+        func unproject(_ px: Int, _ py: Int, _ depth: Float) -> SIMD3<Float> {
+            SIMD3(
+                (Float(px) + 0.5 - cx) * depth / fx,
+                (Float(py) + 0.5 - cy) * depth / fy,
+                depth
+            )
+        }
+
+        let p = unproject(x, y, d)
+        let normal = simd_cross(unproject(x + 1, y, dx) - p, unproject(x, y + 1, dy) - p)
+        let length = simd_length(normal)
+        let rayLength = simd_length(p)
+        guard length > 1e-12, rayLength > 1e-12 else { return 1 }
+
+        // The ray points from the camera at the origin toward p, so the
+        // incidence cosine is the angle between the normal and -p. abs()
+        // because the normal's sign depends on pixel ordering, not on which
+        // way the surface faces.
+        let cosine = abs(simd_dot(normal / length, -p / rayLength))
+        return min(1, cosine * cosine)
     }
 
     // MARK: - Sampling
@@ -180,6 +341,60 @@ final class TsdfVolume {
         let index = (Int(local.z) * Self.blockSize + Int(local.y)) * Self.blockSize + Int(local.x)
         guard entry.weight[index] > 0 else { return nil }
         return entry.sdf[index]
+    }
+
+    /// Linear-space colour at a grid point, or nil where the voxel was never
+    /// colour-visible from any camera.
+    private func sampleColor(_ x: Int32, _ y: Int32, _ z: Int32) -> SIMD3<Float>? {
+        let block = SIMD3<Int32>(
+            Int32((Double(x) / 8).rounded(.down)),
+            Int32((Double(y) / 8).rounded(.down)),
+            Int32((Double(z) / 8).rounded(.down))
+        )
+        guard let entry = blocks[Self.key(block)] else { return nil }
+        let local = SIMD3<Int32>(x, y, z) &- block &* 8
+        let index = (Int(local.z) * Self.blockSize + Int(local.y)) * Self.blockSize + Int(local.x)
+        guard entry.colorWeight[index] > 0 else { return nil }
+        return entry.color[index]
+    }
+
+    /// RGBA8 → linear RGB, bilinear at (u, v), top-row-first like the depth
+    /// map. Averaging happens in linear space so two frames of the same wall
+    /// average to the wall's colour, not a darker one.
+    private func bilinearColor(
+        _ pixels: [UInt8], u: Float, v: Float, width: Int, height: Int
+    ) -> SIMD3<Float> {
+        let x = max(0.001, min(Float(width) - 1.001, u))
+        let y = max(0.001, min(Float(height) - 1.001, v))
+        let x0 = Int(x), y0 = Int(y)
+        let fx = x - Float(x0), fy = y - Float(y0)
+        let x1 = min(x0 + 1, width - 1), y1 = min(y0 + 1, height - 1)
+
+        func pixel(_ px: Int, _ py: Int) -> SIMD3<Float> {
+            let i = (py * width + px) * 4
+            return SIMD3<Float>(
+                Self.srgbToLinear(Float(pixels[i]) / 255),
+                Self.srgbToLinear(Float(pixels[i + 1]) / 255),
+                Self.srgbToLinear(Float(pixels[i + 2]) / 255)
+            )
+        }
+        let top = pixel(x0, y0) * (1 - fx) + pixel(x1, y0) * fx
+        let bottom = pixel(x0, y1) * (1 - fx) + pixel(x1, y1) * fx
+        return top * (1 - fy) + bottom * fy
+    }
+
+    private static func srgbToLinear(_ c: Float) -> Float {
+        c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+    }
+
+    private static func linearToSRGB8(_ c: Float) -> UInt8 {
+        let clamped = max(0, min(1, c))
+        let srgb = clamped <= 0.0031308 ? clamped * 12.92 : 1.055 * pow(clamped, 1 / 2.4) - 0.055
+        return UInt8((srgb * 255).rounded())
+    }
+
+    private static func toSRGB8(_ c: SIMD3<Float>) -> SIMD3<UInt8> {
+        SIMD3(linearToSRGB8(c.x), linearToSRGB8(c.y), linearToSRGB8(c.z))
     }
 
     private func voxelBounds() -> (min: SIMD3<Int32>, max: SIMD3<Int32>)? {
@@ -214,12 +429,26 @@ final class TsdfVolume {
                             (Float(y) + 0.5 + Float(offset.y) * t) * Float(voxelSize),
                             (Float(z) + 0.5 + Float(offset.z) * t) * Float(voxelSize)
                         ))
-                        colors.append(SIMD3<UInt8>(200, 200, 200))
+                        if hasColor {
+                            let ca = sampleColor(x, y, z)
+                            let cb = sampleColor(n.x, n.y, n.z)
+                            let mixed: SIMD3<Float>
+                            switch (ca, cb) {
+                            case let (a?, b?): mixed = a + (b - a) * t
+                            case let (a?, nil): mixed = a
+                            case let (nil, b?): mixed = b
+                            case (nil, nil): mixed = SIMD3<Float>(repeating: 0.6)
+                            }
+                            colors.append(Self.toSRGB8(mixed))
+                        }
                     }
                 }
             }
         }
-        return PointCloud(positions: positions, colors: colors.isEmpty ? nil : colors)
+        return PointCloud(
+            positions: positions,
+            colors: hasColor && !colors.isEmpty ? colors : nil
+        )
     }
 
     // MARK: - Surface extraction
@@ -255,10 +484,12 @@ final class TsdfVolume {
 
     func extractSurface(minComponentTriangles: Int = 24) -> Mesh {
         guard let (lo, hi) = voxelBounds() else {
-            return Mesh(positions: [], normals: nil, indices: [])
+            return Mesh(positions: [], normals: nil, indices: [], colors: nil)
         }
 
+        let wantColors = hasColor
         var positions: [SIMD3<Float>] = []
+        var vertexColors: [SIMD3<UInt8>] = []
         var indices: [UInt32] = []
         var vertexCache: [Int64: UInt32] = [:]
         let offset = Float(voxelSize) * 0.5
@@ -291,6 +522,18 @@ final class TsdfVolume {
             let clamped = max(0, min(1, t))
             let pw = world(p), qw = world(q)
             positions.append(pw + (qw - pw) * clamped)
+            if wantColors {
+                let cp = sampleColor(p.x, p.y, p.z)
+                let cq = sampleColor(q.x, q.y, q.z)
+                let mixed: SIMD3<Float>
+                switch (cp, cq) {
+                case let (a?, b?): mixed = a + (b - a) * clamped
+                case let (a?, nil): mixed = a
+                case let (nil, b?): mixed = b
+                case (nil, nil): mixed = SIMD3<Float>(repeating: 0.6)
+                }
+                vertexColors.append(Self.toSRGB8(mixed))
+            }
 
             let index = UInt32(positions.count - 1)
             vertexCache[key] = index
@@ -338,7 +581,10 @@ final class TsdfVolume {
             }
         }
 
-        var mesh = Mesh(positions: positions, normals: nil, indices: indices)
+        var mesh = Mesh(
+            positions: positions, normals: nil, indices: indices,
+            colors: wantColors ? vertexColors : nil
+        )
         if minComponentTriangles > 0 {
             mesh = Self.removeSmallComponents(mesh, minTriangles: minComponentTriangles)
         }
@@ -399,8 +645,10 @@ final class TsdfVolume {
             sizes[find(Int(mesh.indices[i])), default: 0] += 1
         }
 
+        let meshColors = mesh.colors
         var remap: [UInt32: UInt32] = [:]
         var positions: [SIMD3<Float>] = []
+        var colors: [SIMD3<UInt8>] = []
         var indices: [UInt32] = []
 
         for i in stride(from: 0, to: mesh.indices.count, by: 3) {
@@ -411,12 +659,16 @@ final class TsdfVolume {
                     indices.append(mapped)
                 } else {
                     positions.append(mesh.positions[Int(original)])
+                    if let meshColors { colors.append(meshColors[Int(original)]) }
                     let mapped = UInt32(positions.count - 1)
                     remap[original] = mapped
                     indices.append(mapped)
                 }
             }
         }
-        return Mesh(positions: positions, normals: nil, indices: indices)
+        return Mesh(
+            positions: positions, normals: nil, indices: indices,
+            colors: meshColors == nil ? nil : colors
+        )
     }
 }

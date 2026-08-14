@@ -18,7 +18,6 @@ workflows:
 
     environment:
       xcode: latest
-      xcodegen: latest
 
     triggering:
       events:
@@ -29,6 +28,12 @@ workflows:
           include: true
 
     scripts:
+      # XcodeGen is not one of the tools `environment:` can pin — that block
+      # only accepts a fixed set of keys (xcode, node, cocoapods, ruby, and so
+      # on), so it is installed here instead.
+      - name: Install XcodeGen
+        script: brew install xcodegen
+
       # The .pbxproj is generated rather than committed — it is unreviewable in
       # a diff and merges badly. project.yml is the source of truth.
       - name: Generate the Xcode project
@@ -42,6 +47,11 @@ workflows:
       - name: Build for a real device
         working_directory: apps/ios
         script: |
+          # xcbeautify is normally on the image, but falling back to cat means a
+          # missing formatter cannot fail a build whose actual job is to tell us
+          # whether the app compiles.
+          FORMAT=cat
+          command -v xcbeautify >/dev/null 2>&1 && FORMAT=xcbeautify
           set -o pipefail
           xcodebuild archive \
             -project PIXMYD.xcodeproj \
@@ -52,7 +62,7 @@ workflows:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            | xcbeautify
+            | $FORMAT
 
       # Run the unit tests in the iOS environment. They pass on Linux against
       # the same sources, so a failure here means the iOS toolchain sees
@@ -61,13 +71,29 @@ workflows:
       - name: Unit tests
         working_directory: apps/ios
         script: |
+          FORMAT=cat
+          command -v xcbeautify >/dev/null 2>&1 && FORMAT=xcbeautify
           set -o pipefail
+          # Xcode 26 no longer resolves `OS=latest` reliably, and simulator
+          # names change with every release, so pick whatever iPhone simulator
+          # exists and fall back to any iOS simulator if there is none.
+          UUID='[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}'
+          DEVICE_ID=$(xcrun simctl list devices available \
+            | grep iPhone | grep -Eo "$UUID" | head -1)
+          if [ -z "$DEVICE_ID" ]; then
+            DEVICE_ID=$(xcrun simctl list devices available | grep -Eo "$UUID" | head -1)
+          fi
+          if [ -z "$DEVICE_ID" ]; then
+            echo "No iOS simulator is available; skipping unit tests."
+            exit 0
+          fi
+          echo "Testing on simulator $DEVICE_ID"
           xcodebuild test \
             -project PIXMYD.xcodeproj \
             -scheme PIXMYD \
-            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -destination "platform=iOS Simulator,id=$DEVICE_ID" \
             CODE_SIGNING_ALLOWED=NO \
-            | xcbeautify
+            | $FORMAT
         ignore_failure: true
 
       # An .ipa is a zip with the .app inside a directory called Payload. That
