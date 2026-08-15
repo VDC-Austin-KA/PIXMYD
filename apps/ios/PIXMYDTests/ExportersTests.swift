@@ -377,4 +377,61 @@ final class ExportersTests: XCTestCase {
         XCTAssertEqual(Set(extensions).count, extensions.count)
         XCTAssertFalse(extensions.isEmpty)
     }
+
+    func testFbxIsAvailableAndTheProprietaryFormatsListTheirRoute() {
+        XCTAssertTrue(ExportFormat.fbx.isAvailable)
+        XCTAssertEqual(ExportFormat.fbx.title, "FBX")
+        XCTAssertEqual(ExportFormat.fbx.kind, .mesh)
+        XCTAssertFalse(ExportFormat.nwc.isAvailable)
+        XCTAssertEqual(ExportFormat.nwc.title, "NWC")
+        XCTAssertEqual(ExportFormat.nwc.kind, .mesh)
+        XCTAssertEqual(ExportFormat.nwc.via, "Via FBX")
+        XCTAssertEqual(ExportFormat.rcs.via, "Via E57")
+    }
+
+    // MARK: - OBJ sidecars
+
+    func testObjWithAtlasWritesMtlAndPngBesideTheMesh() throws {
+        let triangle: [SIMD3<Float>] = [SIMD3(0, 0, 0), SIMD3(1, 0, 0), SIMD3(0, 1, 0)]
+        let colors: [SIMD3<UInt8>] = [SIMD3(255, 0, 0), SIMD3(0, 255, 0), SIMD3(0, 0, 255)]
+        let file = url("colored.obj")
+        let atlas = try XCTUnwrap(ColorAtlasBaker.bake(colors: colors, indices: [0, 1, 2], vertexCount: 3))
+        let written = try Exporters.writeObj(
+            positions: triangle, normals: nil, colors: colors, indices: [0, 1, 2],
+            atlas: atlas, to: file
+        )
+        XCTAssertEqual(written.count, 3, "the mesh plus its .mtl and .png")
+
+        let obj = try String(contentsOf: file, encoding: .utf8)
+        XCTAssertTrue(obj.contains("mtllib colored.mtl"))
+        XCTAssertTrue(obj.contains("usemtl colored-material"))
+        // Vertex colour is kept alongside the texture: some tools read it,
+        // none are confused by it.
+        XCTAssertTrue(obj.contains("v 0.000000 0.000000 0.000000 1.000000 0.000000 0.000000\n"))
+        // One vt per triangle, and every corner samples texel 1.
+        XCTAssertEqual(obj.components(separatedBy: "\nvt ").count - 1, 1)
+        XCTAssertTrue(obj.contains("\nf 1/1 2/1 3/1\n"))
+
+        let mtl = try String(contentsOf: directory.appendingPathComponent("colored.mtl"), encoding: .utf8)
+        XCTAssertTrue(mtl.contains("newmtl colored-material"))
+        XCTAssertTrue(mtl.contains("map_Kd colored.png"))
+
+        let png = try Data(contentsOf: directory.appendingPathComponent("colored.png"))
+        XCTAssertEqual(
+            [UInt8](png.prefix(8)),
+            [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
+            "the sidecar texture must be a PNG"
+        )
+    }
+
+    func testObjWithoutColoursStaysASingleFile() throws {
+        let triangle: [SIMD3<Float>] = [SIMD3(0, 0, 0), SIMD3(1, 0, 0), SIMD3(0, 1, 0)]
+        let file = url("plain.obj")
+        let written = try Exporters.writeObj(
+            positions: triangle, normals: nil, colors: nil, indices: [0, 1, 2], to: file
+        )
+        XCTAssertEqual(written, [file])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url("plain.mtl").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url("plain.png").path))
+    }
 }

@@ -19,7 +19,7 @@ struct ExportSheet: View {
     // floating specks — so "no cleanup" is the deliberate choice, not the
     // default anyone lands on by accident.
     @State private var cleanup: ProcessingPipeline.Cleanup = .standard
-    @State private var exportedURL: URL?
+    @State private var exportedURLs: [URL]?
     @State private var showShare = false
     /// Look at the result before writing it. On by default for meshes: the
     /// whole complaint was not being able to tell what a scan produced without
@@ -36,8 +36,8 @@ struct ExportSheet: View {
                 VStack(spacing: Theme.Metrics.gutter) {
                     formatPicker
 
-                    if format == .rcs {
-                        rcsBridge
+                    if !format.isAvailable {
+                        unavailableBridge
                     } else {
                         qualityPicker
                         // Only meshes are decimated. A point cloud has no
@@ -65,8 +65,8 @@ struct ExportSheet: View {
                 }
             }
             .sheet(isPresented: $showShare) {
-                if let exportedURL {
-                    ShareSheet(items: [exportedURL])
+                if let exportedURLs {
+                    ShareSheet(items: exportedURLs.map { $0 as Any })
                 }
             }
             .fullScreenCover(isPresented: reviewBinding) {
@@ -161,7 +161,7 @@ struct ExportSheet: View {
                                         .font(Theme.Typeface.label(15, weight: .semibold))
                                         .foregroundStyle(Theme.Palette.text)
                                     if !candidate.isAvailable {
-                                        StatusChip(text: "Via E57", tone: .caution)
+                                        StatusChip(text: candidate.via, tone: .caution)
                                     }
                                 }
                                 Text(candidate.detail)
@@ -257,16 +257,24 @@ struct ExportSheet: View {
                 FieldButton(title: "Try again", systemImage: "arrow.clockwise", role: .primary) {
                     run()
                 }
-            } else if case .finished(let url, let summary) = processor.state {
+            } else if case .finished(let urls, let summary) = processor.state {
                 Panel(title: "Done") {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(summary)
                             .font(Theme.Typeface.caption)
                             .foregroundStyle(Theme.Palette.textSecondary)
+                        if urls.count > 1 {
+                            // An OBJ export is the mesh plus its .mtl and .png
+                            // sidecars; the share sheet carries all of them so
+                            // the trio arrives on the other machine together.
+                            Text("\(urls.count) files")
+                                .font(Theme.Typeface.caption)
+                                .foregroundStyle(Theme.Palette.textTertiary)
+                        }
                     }
                 }
                 FieldButton(title: "Share", systemImage: "square.and.arrow.up", role: .primary) {
-                    exportedURL = url
+                    exportedURLs = urls
                     showShare = true
                 }
             } else {
@@ -309,6 +317,53 @@ struct ExportSheet: View {
 
             FieldButton(title: "Export E57 instead", systemImage: "arrow.right", role: .primary) {
                 format = .e57
+            }
+        }
+    }
+
+    /// The bridge panel for whichever proprietary format was picked. Both
+    /// unavailable formats explain honestly and point at the export that
+    /// actually works.
+    private var unavailableBridge: some View {
+        if format == .rcs {
+            rcsBridge
+        } else {
+            nwcBridge
+        }
+    }
+
+    private var nwcBridge: some View {
+        VStack(spacing: Theme.Metrics.gutter) {
+            Panel(title: "Why not directly") {
+                Text(NwcBridge.explanation)
+                    .font(Theme.Typeface.caption)
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            ForEach(NwcBridge.routes, id: \.name) { route in
+                Panel(title: route.name) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Needs \(route.requires)")
+                            .font(Theme.Typeface.caption)
+                            .foregroundStyle(Theme.Palette.textTertiary)
+                        ForEach(Array(route.steps.enumerated()), id: \.offset) { index, step in
+                            HStack(alignment: .top, spacing: 8) {
+                                Text("\(index + 1).")
+                                    .font(Theme.Typeface.numeric(12))
+                                    .foregroundStyle(Theme.Palette.textTertiary)
+                                Text(step)
+                                    .font(Theme.Typeface.caption)
+                                    .foregroundStyle(Theme.Palette.textSecondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                }
+            }
+
+            FieldButton(title: "Export FBX instead", systemImage: "arrow.right", role: .primary) {
+                format = .fbx
             }
         }
     }

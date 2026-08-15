@@ -33,7 +33,10 @@ final class ProcessingPipeline: ObservableObject {
         /// millions of triangles inside would mean walking the whole array to
         /// answer "did the state change".
         case reviewing(summary: String)
-        case finished(url: URL, summary: String)
+        /// `urls` is a plural for a reason: OBJ textures arrive as a `.mtl` and
+        /// a `.png` beside the mesh, and all three have to reach the share
+        /// sheet or the export is silently missing half of itself.
+        case finished(urls: [URL], summary: String)
         case failed(String)
     }
 
@@ -94,11 +97,11 @@ final class ProcessingPipeline: ObservableObject {
                             self.state = .reviewing(summary: summary)
                         }
                     } else if format.kind == .mesh {
-                        try Self.writeMesh(
+                        let written = try Self.writeMesh(
                             cached.mesh, format: format, to: url,
                             project: project, quality: quality, integrated: cached.meta.integratedFrames
                         )
-                        await MainActor.run { self.state = .finished(url: url, summary: summary) }
+                        await MainActor.run { self.state = .finished(urls: written, summary: summary) }
                     } else {
                         guard let points = cached.points else {
                             throw ProcessingError.emptyResult(
@@ -107,7 +110,7 @@ final class ProcessingPipeline: ObservableObject {
                             )
                         }
                         try Self.writePoints(points, format: format, to: url)
-                        await MainActor.run { self.state = .finished(url: url, summary: summary) }
+                        await MainActor.run { self.state = .finished(urls: [url], summary: summary) }
                     }
                     return
                 }
@@ -125,8 +128,8 @@ final class ProcessingPipeline: ObservableObject {
                 }
                 await MainActor.run {
                     switch outcome {
-                    case .file(let url, let summary):
-                        self.state = .finished(url: url, summary: summary)
+                    case .file(let urls, let summary):
+                        self.state = .finished(urls: urls, summary: summary)
                     case .mesh(let mesh, let summary):
                         self.reviewMesh = mesh
                         self.state = .reviewing(summary: summary)
@@ -159,14 +162,14 @@ final class ProcessingPipeline: ObservableObject {
         task = Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             do {
-                try Self.writeMesh(
+                let written = try Self.writeMesh(
                     mesh, format: format, to: url,
                     project: project, quality: quality, integrated: integratedFrames
                 )
                 let summary = "\(mesh.positions.count) vertices, "
                     + "\(mesh.indices.count / 3) triangles, as edited."
                 await MainActor.run {
-                    self.state = .finished(url: url, summary: summary)
+                    self.state = .finished(urls: written, summary: summary)
                 }
             } catch {
                 await MainActor.run { self.state = .failed(error.localizedDescription) }
@@ -221,13 +224,17 @@ final class ProcessingPipeline: ObservableObject {
     // MARK: - Work
 
     private enum Outcome {
-        case file(URL, String)
+        case file([URL], String)
         case mesh(TsdfVolume.Mesh, String)
     }
 
     /// Write an already-built mesh. Shared by the straight-to-file path and by
     /// export-after-review, so the two cannot drift into producing different
     /// files from the same geometry.
+    ///
+    /// Returns every file produced — OBJ textures are also written as a `.mtl`
+    /// and a `.png` beside the mesh, and all of them have to reach the share
+    /// sheet or the export is silently incomplete.
     ///
     /// `nonisolated` because this class is `@MainActor`, which every member
     /// inherits — including the static ones. Without it, encoding a GLB and
@@ -240,18 +247,47 @@ final class ProcessingPipeline: ObservableObject {
         project: CaptureProject,
         quality: Quality,
         integrated: Int
-    ) throws {
+    ) throws -> [URL] {
         switch format {
         case .glb:
             try Exporters.writeGlb(
                 positions: mesh.positions, normals: mesh.normals,
                 colors: mesh.colors, indices: mesh.indices, to: url
             )
+            return [url]
         case .obj:
-            try Exporters.writeObj(
-                positions: mesh.positions, normals: mesh.normals,
-                colors: mesh.colors, indices: mesh.indices, to: url
+            // The colour a fused scan has is per vertex, which most OBJ
+            // importers ignore — the file arrives grey and looks broken when
+            // the data was fine all along. Baking the colours into a texture
+            // atlas is what "colour" means for an OBJ; no colours is a normal
+            // mesh, not an error, so the writer runs untextured.
+            let atlas = try ColorAtlasBaker.bake(
+                colors: mesh.colors,
+                indices: mesh.indices,
+                vertexCount: mesh.positions.count
             )
+            return try Exporters.writeObj(
+                positions: mesh.positions, normals: mesh.normals,
+                colors: mesh.colors, indices: mesh.indices,
+                atlas: atlas, to: url
+            )
+        case .fbx:
+            // Same bake as OBJ, but FBX can carry the texture *inside* the
+            // single file instead of as sidecars: the atlas's per-triangle UVs
+            // are flattened to per-polygon-corner and the PNG is embedded.
+            let atlas = try ColorAtlasBaker.bake(
+                colors: mesh.colors,
+                indices: mesh.indices,
+                vertexCount: mesh.positions.count
+            )
+            try Exporters.writeFbx(
+                positions: mesh.positions, normals: mesh.normals,
+                colors: mesh.colors, indices: mesh.indices,
+                polygonUvs: atlas.map { ColorAtlasBaker.polygonUvs(of: $0, for: mesh.indices) },
+                texture: atlas?.texture,
+                to: url
+            )
+            return [url]
         case .html:
             // The page carries a GLB, so one is written to a scratch file and
             // read back rather than duplicating the writer.
@@ -274,11 +310,21 @@ final class ProcessingPipeline: ObservableObject {
                 ],
                 to: url
             )
+            return [url]
+        case .rcs, .nwc:
+            // The format list refuses these already (see `isAvailable`), but
+            // the fall-through to PLY below would silently misname a file if
+            // some future path forgot. Better to say so than hand back a PLY
+            // called scan.nwc.
+            throw ProcessingError.notImplemented(
+                "\(format.title) is not written on device. Use the route shown in the export sheet."
+            )
         default:
             try Exporters.writeMeshPly(
                 positions: mesh.positions, normals: mesh.normals,
                 colors: mesh.colors, indices: mesh.indices, to: url
             )
+            return [url]
         }
     }
 
@@ -389,6 +435,7 @@ final class ProcessingPipeline: ObservableObject {
 
         let url = Self.exportURL(for: project, format: format)
         let summary: String
+        var written = [url]
 
         switch format.kind {
         case .mesh:
@@ -461,7 +508,7 @@ final class ProcessingPipeline: ObservableObject {
             if reviewFirst { return .mesh(mesh, summary) }
 
             await progress("Writing \(format.title)", 0.9)
-            try writeMesh(
+            written = try writeMesh(
                 mesh, format: format, to: url,
                 project: project, quality: quality, integrated: integrated
             )
@@ -486,7 +533,7 @@ final class ProcessingPipeline: ObservableObject {
         }
 
         await progress("Done", 1)
-        return .file(url, summary)
+        return .file(written, summary)
     }
 
     /// Write a fused point cloud. Shared by the straight-to-file path and the
@@ -507,6 +554,10 @@ final class ProcessingPipeline: ObservableObject {
             throw ProcessingError.notImplemented(
                 "E57 export runs in the studio, not on the phone. Export PLY or LAS "
                     + "here, or open the capture in the studio for E57."
+            )
+        case .rcs, .nwc:
+            throw ProcessingError.notImplemented(
+                "\(format.title) is not written on device. Use the route shown in the export sheet."
             )
         default:
             try Exporters.writePointCloudPly(
