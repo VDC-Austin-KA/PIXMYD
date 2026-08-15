@@ -324,6 +324,7 @@ struct ExportSheet: View {
     /// The bridge panel for whichever proprietary format was picked. Both
     /// unavailable formats explain honestly and point at the export that
     /// actually works.
+    @ViewBuilder
     private var unavailableBridge: some View {
         if format == .rcs {
             rcsBridge
