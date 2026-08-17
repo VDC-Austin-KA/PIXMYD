@@ -4,6 +4,14 @@ import SwiftUI
 struct PIXMYDApp: App {
     @StateObject private var projectStore = ProjectStore()
     @StateObject private var gnss = GnssManager()
+    /// Owned by the app rather than by the scan screen.
+    ///
+    /// The scanner holds the one `CBCentralManager` in the app, and CoreBluetooth
+    /// tears down every connection that manager opened when it goes away. If the
+    /// scan screen owned it, connecting a receiver and then dismissing the sheet
+    /// would drop the link — and the delegate callbacks that would have reported
+    /// the drop would have gone with it.
+    @StateObject private var receiverScanner = ReceiverScanner()
     @StateObject private var settings = AppSettings()
     @StateObject private var survey = SurveyStore()
     @StateObject private var router = AppRouter()
@@ -14,12 +22,21 @@ struct PIXMYDApp: App {
             RootView()
                 .environmentObject(projectStore)
                 .environmentObject(gnss)
+                .environmentObject(receiverScanner)
                 .environmentObject(settings)
                 .environmentObject(survey)
                 .environmentObject(router)
                 .environmentObject(site)
                 .preferredColorScheme(.dark)
                 .tint(Theme.Palette.accent)
+                // Nothing was starting the position manager, so CoreLocation
+                // was never asked for authorisation and an MFi receiver already
+                // attached was never picked up — every capture fell back to no
+                // georeference at all. It starts with the app and runs for its
+                // lifetime; it is deliberately not stopped when a screen goes
+                // away, because a receiver connected on the capture screen has
+                // to survive a trip to the Projects tab.
+                .task { gnss.start() }
         }
     }
 }

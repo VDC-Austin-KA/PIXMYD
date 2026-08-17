@@ -42,6 +42,7 @@ let portableSources = [
     "Export/ProcessedArtifact.swift",
     "Export/WebPageExport.swift",
     "RTK/NmeaAssembler.swift",
+    "RTK/ReceiverDiscovery.swift",
 ]
 
 // The rest of the app: SwiftUI screens, the ARKit session, the CoreLocation and
@@ -75,6 +76,9 @@ let unportableFiles = [
     "Projects/ProjectsView.swift",
     "RTK/GnssManager.swift",
     "RTK/NtripClient.swift",
+    "RTK/ReceiverScanner.swift",
+    "RTK/ReceiverScanView.swift",
+    "RTK/ReceiverTransport.swift",
     "Survey/SurveyView.swift",
 ]
 

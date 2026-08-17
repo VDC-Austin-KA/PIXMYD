@@ -29,6 +29,7 @@ struct CaptureView: View {
     /// the normal way to scan rather than a setting to discover.
     @State private var meshStyle: SceneMeshOverlay.Style? = .coverage
     @State private var showTools = false
+    @State private var showReceiverScan = false
     @State private var showSaveSheet = false
     @State private var showCancelConfirm = false
     @State private var pendingProject: CaptureProject?
@@ -57,8 +58,13 @@ struct CaptureView: View {
         .onAppear { controller.start(settings: settings.capture) }
         .onDisappear { controller.stop() }
         .sheet(isPresented: $showTools) {
+            // Large as well as medium: the tools sheet can push the receiver
+            // scan, and a list of found devices does not fit in half a screen.
             ToolsSheet(controller: controller)
-                .presentationDetents([.medium])
+                .presentationDetents([.medium, .large])
+        }
+        .sheet(isPresented: $showReceiverScan) {
+            NavigationStack { ReceiverScanView() }
         }
         .sheet(isPresented: $showSaveSheet) {
             SaveCaptureSheet(
@@ -116,7 +122,9 @@ struct CaptureView: View {
 
     private var topBar: some View {
         HStack(alignment: .top, spacing: Theme.Metrics.gutterTight) {
-            SignalQualityBadge(fix: gnss.currentFix, state: gnss.connectionState)
+            SignalQualityBadge(fix: gnss.currentFix, state: gnss.connectionState) {
+                showReceiverScan = true
+            }
 
             Spacer()
 
@@ -399,9 +407,14 @@ struct ARViewContainer: UIViewRepresentable {
 struct SignalQualityBadge: View {
     let fix: GnssFix?
     let state: GnssManager.ConnectionState
+    /// Tapping the badge opens scan mode. The badge is where someone looks the
+    /// moment they notice the position is not what they wanted, so it is the
+    /// right place to put "connect a receiver" — it used to be a control that
+    /// did nothing at all.
+    var onTap: () -> Void = {}
 
     var body: some View {
-        Button {} label: {
+        Button(action: onTap) {
             HStack(spacing: 8) {
                 Image(systemName: icon)
                     .font(.system(size: 14, weight: .semibold))
@@ -423,6 +436,7 @@ struct SignalQualityBadge: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Position quality: \(title). \(accuracy ?? "no accuracy reported")")
+        .accessibilityHint("Opens scan mode to connect an RTK receiver")
     }
 
     private var title: String {

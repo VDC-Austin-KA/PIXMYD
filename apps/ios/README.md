@@ -119,8 +119,18 @@ registration residual, and export.
 **Survey.** Point collections imported from PNEZD files, for georeferencing and
 for grading the result.
 
-**Account.** Capture settings, RTK profiles with NTRIP credentials and antenna
-offsets, AR display options, and a plain statement of what this device can do.
+**Account.** Capture settings, scan mode, RTK profiles with NTRIP credentials
+and antenna offsets, AR display options, and a plain statement of what this
+device can do.
+
+**Scan mode.** Finding a receiver over the air, reachable from the Account tab,
+from the capture screen's tools sheet, and by tapping the position badge while
+scanning. Three searches run at once — a Bluetooth LE scan, a Bonjour browse of
+the network the phone is joined to, and the list of attached MFi accessories —
+because a receiver announces itself on exactly one of them and the user should
+not have to know which. A `host:port` can also be typed, which is the normal
+case rather than a fallback: a rover in access-point mode with a raw TCP output
+advertises nothing at all.
 
 ## Design decisions worth knowing
 
@@ -153,6 +163,21 @@ every receiver shows four bars for both. HDOP is labelled HDOP, never
 "accuracy" — it is a satellite-geometry factor, and presenting it as an accuracy
 would be a lie the user cannot detect.
 
+**Connecting is not the same as working.** A link that opens and then delivers
+something unreadable presents to the user as "it connected and there is no
+position", which is indistinguishable from a receiver with no sky view. The
+first bytes off every link are classified — NMEA, RTCM, u-blox binary, or
+nothing recognisable — and anything that is not NMEA is reported with the thing
+to change on the receiver. The screen also shows how many bytes have arrived, so
+"connected and silent" is visibly different from "connected and misconfigured".
+
+**The scan hides most of what it finds, and says how much.** A Bluetooth scan
+anywhere near people finds phones, watches, tyre sensors and headphones. Devices
+are shown first when they advertise a serial service or name a maker the app
+recognises; the rest are hidden behind a toggle that carries the count, so the
+filter is never silent. Name matching is a heuristic that affects ordering and
+labels only — an unrecognised device is still listed and still connectable.
+
 **The antenna lever arm is a first-class setting.** A pole-mounted rover sits a
 fixed offset above and behind the phone. Ignoring it shifts every point in the
 capture by exactly that amount — it does not average out, and it is invisible in
@@ -172,7 +197,7 @@ PIXMYD/
   Projects/   on-disk project store and detail
   Survey/     point collections, PNEZD import
   Account/    settings, RTK profiles
-  RTK/        GNSS manager, NMEA parsing, NTRIP client
+  RTK/        GNSS manager, NMEA parsing, NTRIP client, receiver scan and links
   Export/     TSDF fusion, marching tetrahedra, format writers
   Model/      the capture bundle schema
   Design/     theme and shared components
@@ -197,9 +222,16 @@ Nothing here has run on hardware. In rough order of what would bite first:
 3. **External Accessory support is unverified.** The protocol strings in
    `Info.plist` are the published ones for Emlid, Bad Elf and Trimble, but MFi
    receivers vary and none has been tested.
-4. **The NTRIP client speaks NTRIP v1 only.** Enough for most casters, not all.
-5. **On-device fusion has no measured performance.** The time estimates in the
+4. **No radio in the scan has met a real receiver.** The bookkeeping behind it
+   is tested on Linux — merging repeated sightings, expiry, endpoint parsing,
+   stream classification, line reassembly — but which BLE service a given
+   receiver actually exposes, and whether it advertises any Bonjour type at
+   all, is a question only hardware answers. The generic fallback (any
+   characteristic that can notify) and the typed `host:port` exist because that
+   answer varies by make.
+5. **The NTRIP client speaks NTRIP v1 only.** Enough for most casters, not all.
+6. **On-device fusion has no measured performance.** The time estimates in the
    export sheet are stated as rough and are currently guesses.
-6. **No accuracy validation.** The registration bands come from construction
+7. **No accuracy validation.** The registration bands come from construction
    practice, but no capture from this app has been checked against a control
    network.

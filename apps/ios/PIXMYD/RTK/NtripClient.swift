@@ -76,7 +76,26 @@ final class NtripClient: @unchecked Sendable {
     private var positionTimer: DispatchSourceTimer?
 
     /// The most recent GGA to report upstream, set by the GNSS manager.
-    var latestGga: String?
+    ///
+    /// Written on the main actor as sentences arrive and read on this client's
+    /// own queue by the position timer, so the two are separated by a lock. A
+    /// bare `var` here is a genuine race on a `String` — not a benign one — and
+    /// it went unnoticed while nothing was writing the property at all.
+    var latestGga: String? {
+        get {
+            ggaLock.lock()
+            defer { ggaLock.unlock() }
+            return storedGga
+        }
+        set {
+            ggaLock.lock()
+            defer { ggaLock.unlock() }
+            storedGga = newValue
+        }
+    }
+
+    private let ggaLock = NSLock()
+    private var storedGga: String?
 
     init(profile: RtkProfile) {
         self.profile = profile

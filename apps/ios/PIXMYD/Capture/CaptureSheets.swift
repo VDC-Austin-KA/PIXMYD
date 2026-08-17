@@ -73,14 +73,39 @@ struct ToolsSheet: View {
                             )
                             CapabilityRow(
                                 name: "RTK receiver",
-                                available: gnss.connectionState == .connected,
-                                note: gnss.connectionState == .connected
-                                    ? "Connected. \(gnss.currentFix?.quality.label ?? "no fix")"
-                                    : "Not connected. Positions come from the internal GNSS, "
-                                        + "which is metre-level."
+                                available: gnss.connectedReceiver != nil,
+                                note: receiverNote
                             )
                         }
                     }
+
+                    NavigationLink {
+                        ReceiverScanView()
+                    } label: {
+                        Panel {
+                            HStack(alignment: .top, spacing: Theme.Metrics.gutterTight) {
+                                Image(systemName: "dot.radiowaves.left.and.right")
+                                    .font(.system(size: 19))
+                                    .frame(width: 28)
+                                    .foregroundStyle(Theme.Palette.accent)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Scan for a receiver")
+                                        .font(Theme.Typeface.label(16, weight: .semibold))
+                                        .foregroundStyle(Theme.Palette.text)
+                                    Text("Looks for an RTK receiver over Bluetooth or Wi-Fi and "
+                                         + "connects to it, without leaving the capture screen.")
+                                        .font(Theme.Typeface.caption)
+                                        .foregroundStyle(Theme.Palette.textSecondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(Theme.Palette.textTertiary)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
                 }
                 .padding(Theme.Metrics.gutter)
             }
@@ -93,6 +118,20 @@ struct ToolsSheet: View {
                 }
             }
         }
+    }
+
+    /// What the receiver row says. A connected link that is not producing
+    /// positions is its own state, and the note says which of the three it is.
+    private var receiverNote: String {
+        guard let receiver = gnss.connectedReceiver else {
+            return "Not connected. Positions come from the internal GNSS, which is "
+                + "metre-level. Scan below to connect one."
+        }
+        if let fix = gnss.currentFix {
+            return "\(receiver.displayName) over \(receiver.link.label). \(fix.quality.label)."
+        }
+        return "\(receiver.displayName) over \(receiver.link.label). "
+            + (gnss.streamKind.advice ?? "No fix yet.")
     }
 }
 
