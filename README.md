@@ -140,8 +140,9 @@ same answer, or there is no way to tell a real improvement from RANSAC's luck.
 
 ### iOS capture app — `apps/ios`
 
-ARKit + LiDAR capture, RTK GNSS over MFi/Bluetooth with an NTRIP client,
-on-device fusion and export. Four tabs — Capture, Projects, Survey, Account.
+ARKit + LiDAR capture, RTK GNSS over MFi, Bluetooth LE or Wi-Fi — with a scan
+mode that finds a receiver over the air — an NTRIP client, on-device fusion and
+export. Five tabs — Capture, Projects, Site, Survey, Account.
 
 **Partly compiled.** The arithmetic — bundle schema, TSDF fusion, meshing,
 format writers, NMEA parsing — builds and tests on Linux via

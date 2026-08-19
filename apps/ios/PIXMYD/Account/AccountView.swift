@@ -73,6 +73,9 @@ struct AccountView: View {
                     NavigationLink { CaptureSettingsView() } label: {
                         Label("Capture", systemImage: "camera")
                     }
+                    NavigationLink { ReceiverScanView() } label: {
+                        Label("Scan for receivers", systemImage: "dot.radiowaves.left.and.right")
+                    }
                     NavigationLink { RtkProfilesView() } label: {
                         Label("RTK profiles", systemImage: "antenna.radiowaves.left.and.right")
                     }
@@ -86,8 +89,13 @@ struct AccountView: View {
 
                 Section {
                     LabeledContent("Position source", value: gnss.source.rawValue)
-                    if let receiver = gnss.receiverName {
-                        LabeledContent("Receiver", value: receiver)
+                    if let receiver = gnss.connectedReceiver {
+                        LabeledContent("Receiver", value: receiver.displayName)
+                        LabeledContent("Link", value: "\(receiver.link.label) — \(gnss.linkState.label)")
+                        // The format matters as much as the connection: a link
+                        // that is up and carrying something other than NMEA
+                        // yields no position at all.
+                        LabeledContent("Stream", value: gnss.streamKind.rawValue.uppercased())
                     }
                     LabeledContent("NTRIP", value: gnss.ntripState.label)
                     LabeledContent("LiDAR", value: ARSessionController.hasLiDAR ? "Available" : "Not on this device")

@@ -40,11 +40,25 @@
   <key>NSMotionUsageDescription</key>
   <string>PIXMYD reads the motion sensors to track where the camera is between frames. Scanning does not work without them.</string>
   <key>NSBluetoothAlwaysUsageDescription</key>
-  <string>PIXMYD connects to an external RTK GNSS receiver over Bluetooth for centimetre-accurate positions.</string>
+  <string>PIXMYD scans for nearby RTK GNSS receivers over Bluetooth and connects to the one you choose, for centimetre-accurate positions.</string>
   <key>NSPhotoLibraryAddUsageDescription</key>
   <string>PIXMYD saves exported models and point clouds to your photo library when you ask it to.</string>
   <key>NSLocalNetworkUsageDescription</key>
-  <string>PIXMYD reaches an NTRIP caster for RTK corrections, and transfers point sets and scans to and from PIXMYD-Nav on a workstation you scan a code from. Both are connections you start.</string>
+  <string>PIXMYD looks for RTK GNSS receivers on the network you are joined to, reaches an NTRIP caster for corrections, and transfers point sets and scans to and from PIXMYD-Nav on a workstation you scan a code from. All are connections you start.</string>
+
+  <!--
+    Bonjour types the receiver scan browses for. iOS does not merely ignore an
+    unlisted type: it returns no results for it, which is indistinguishable
+    from nothing being there. Every type in ReceiverScanner.bonjourTypes has to
+    appear here, and adding one there means adding it here too.
+  -->
+  <key>NSBonjourServices</key>
+  <array>
+    <string>_ntrip._tcp</string>
+    <string>_nmea._tcp</string>
+    <string>_gnss._tcp</string>
+    <string>_reach._tcp</string>
+  </array>
 
   <!--
     App Transport Security blocks plain HTTP from the URL loading system, and
