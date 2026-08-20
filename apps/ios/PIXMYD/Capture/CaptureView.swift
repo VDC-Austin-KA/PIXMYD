@@ -122,8 +122,11 @@ struct CaptureView: View {
 
     private var topBar: some View {
         HStack(alignment: .top, spacing: Theme.Metrics.gutterTight) {
-            SignalQualityBadge(fix: gnss.currentFix, state: gnss.connectionState) {
-                showReceiverScan = true
+            VStack(alignment: .leading, spacing: 6) {
+                SignalQualityBadge(fix: gnss.currentFix, state: gnss.connectionState) {
+                    showReceiverScan = true
+                }
+                receiverButton
             }
 
             Spacer()
@@ -145,6 +148,51 @@ struct CaptureView: View {
             .accessibilityLabel("Tools")
         }
         .padding(.top, Theme.Metrics.gutterTight)
+    }
+
+    /// The way to a receiver, in words, on the screen someone is holding when
+    /// they need one.
+    ///
+    /// It was previously two taps into a tools sheet and an unlabelled tap on
+    /// the position badge, which is the same as not being there: nobody hunts
+    /// through a menu for a capability they do not know exists. Connected, it
+    /// keeps its place and names the receiver, so the answer to "what am I
+    /// getting positions from" is on the viewfinder rather than behind it.
+    private var receiverButton: some View {
+        Button {
+            showReceiverScan = true
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: gnss.connectedReceiver == nil
+                      ? "dot.radiowaves.left.and.right"
+                      : gnss.connectedReceiver?.link.systemImage ?? "antenna.radiowaves.left.and.right")
+                    .font(.system(size: 13, weight: .semibold))
+                Text(receiverButtonTitle)
+                    .font(Theme.Typeface.label(13, weight: .semibold))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(gnss.connectedReceiver == nil
+                             ? Theme.Palette.accent : Theme.Palette.good)
+            .padding(.horizontal, 11)
+            .frame(minHeight: 34)
+            .background(.black.opacity(0.6), in: Capsule())
+            .overlay(
+                Capsule().strokeBorder(
+                    (gnss.connectedReceiver == nil ? Theme.Palette.accent : Theme.Palette.good)
+                        .opacity(0.45),
+                    lineWidth: 1
+                )
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(gnss.connectedReceiver == nil
+                            ? "Scan for nearby RTK devices"
+                            : "RTK receiver \(receiverButtonTitle). Opens scan mode.")
+    }
+
+    private var receiverButtonTitle: String {
+        guard let receiver = gnss.connectedReceiver else { return "Scan for RTK" }
+        return receiver.displayName
     }
 
     /// Cycles the live mesh: coverage wireframe, surface colours, off.
