@@ -36,7 +36,12 @@ struct PIXMYDApp: App {
                 // lifetime; it is deliberately not stopped when a screen goes
                 // away, because a receiver connected on the capture screen has
                 // to survive a trip to the Projects tab.
-                .task { gnss.start() }
+                .task {
+                    gnss.start()
+                    // The active profile's antenna offset applies from launch,
+                    // not from the first time its screen is opened.
+                    if let profile = settings.activeProfile { gnss.apply(profile) }
+                }
         }
     }
 }

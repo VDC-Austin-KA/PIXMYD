@@ -21,6 +21,26 @@ final class AppSettings: ObservableObject {
         rtkProfiles.first { $0.id == activeProfileID }
     }
 
+    /// Replace a profile in place, keeping its position in the list.
+    func update(_ profile: RtkProfile) {
+        guard let index = rtkProfiles.firstIndex(where: { $0.id == profile.id }) else { return }
+        rtkProfiles[index] = profile
+    }
+
+    /// Write a receiver the scan just connected into the profiles.
+    ///
+    /// The rules live in `RtkProfileBinding`, which is pure and tested; this is
+    /// the part that has to touch published state.
+    @discardableResult
+    func remember(_ receiver: SavedReceiver) -> RtkProfile {
+        var profiles = rtkProfiles
+        var active = activeProfileID
+        let profile = RtkProfileBinding.remember(receiver, in: &profiles, active: &active)
+        rtkProfiles = profiles
+        activeProfileID = active
+        return profile
+    }
+
     private struct Stored: Codable {
         var capture: CaptureSettings
         var tagDetection: Bool
@@ -73,11 +93,17 @@ struct AccountView: View {
                     NavigationLink { CaptureSettingsView() } label: {
                         Label("Capture", systemImage: "camera")
                     }
-                    NavigationLink { ReceiverScanView() } label: {
-                        Label("Scan for receivers", systemImage: "dot.radiowaves.left.and.right")
-                    }
-                    NavigationLink { RtkProfilesView() } label: {
-                        Label("RTK profiles", systemImage: "antenna.radiowaves.left.and.right")
+                    NavigationLink { RtkSettingsView() } label: {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("RTK")
+                                Text(rtkSummary)
+                                    .font(Theme.Typeface.caption)
+                                    .foregroundStyle(Theme.Palette.textSecondary)
+                            }
+                        } icon: {
+                            Image(systemName: "antenna.radiowaves.left.and.right")
+                        }
                     }
                     NavigationLink { ArSettingsView() } label: {
                         Label("AR display", systemImage: "arkit")
@@ -124,6 +150,17 @@ struct AccountView: View {
             .background(Theme.Palette.background)
             .navigationTitle("Account")
         }
+    }
+}
+
+extension AccountView {
+    /// One line under the RTK row saying where the receiver stands, so the
+    /// answer to "am I connected" does not need a tap.
+    var rtkSummary: String {
+        if let receiver = gnss.connectedReceiver {
+            return "\(receiver.displayName) over \(receiver.link.label)"
+        }
+        return "Scan for a receiver, profiles, corrections"
     }
 }
 
@@ -247,164 +284,5 @@ struct ArSettingsView: View {
         .background(Theme.Palette.background)
         .navigationTitle("AR display")
         .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-struct RtkProfilesView: View {
-    @EnvironmentObject private var settings: AppSettings
-    @EnvironmentObject private var gnss: GnssManager
-    @State private var editing: RtkProfile?
-
-    var body: some View {
-        List {
-            Section {
-                ForEach(settings.rtkProfiles) { profile in
-                    Button {
-                        editing = profile
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(profile.name)
-                                    .foregroundStyle(Theme.Palette.text)
-                                Text(profile.isComplete
-                                     ? "\(profile.host):\(profile.port)/\(profile.mountPoint)"
-                                     : "Incomplete")
-                                    .font(Theme.Typeface.caption)
-                                    .foregroundStyle(Theme.Palette.textSecondary)
-                            }
-                            Spacer()
-                            if settings.activeProfileID == profile.id {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(Theme.Palette.good)
-                            }
-                        }
-                    }
-                    .swipeActions {
-                        Button(role: .destructive) {
-                            settings.rtkProfiles.removeAll { $0.id == profile.id }
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
-                        Button {
-                            settings.activeProfileID = profile.id
-                            gnss.startNtrip(profile: profile)
-                        } label: {
-                            Label("Use", systemImage: "checkmark")
-                        }
-                        .tint(Theme.Palette.accent)
-                    }
-                }
-            } header: {
-                Text("Profiles")
-            }
-            .listRowBackground(Theme.Palette.surface)
-
-            Section {
-                Button {
-                    let profile = RtkProfile()
-                    settings.rtkProfiles.append(profile)
-                    editing = profile
-                } label: {
-                    Label("New profile", systemImage: "plus")
-                }
-            }
-            .listRowBackground(Theme.Palette.surface)
-        }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .background(Theme.Palette.background)
-        .navigationTitle("RTK profiles")
-        .navigationBarTitleDisplayMode(.inline)
-        .sheet(item: $editing) { profile in
-            RtkProfileEditor(profile: profile) { updated in
-                if let index = settings.rtkProfiles.firstIndex(where: { $0.id == updated.id }) {
-                    settings.rtkProfiles[index] = updated
-                }
-            }
-        }
-    }
-}
-
-struct RtkProfileEditor: View {
-    @State var profile: RtkProfile
-    let onSave: (RtkProfile) -> Void
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Name") {
-                    TextField("Profile name", text: $profile.name)
-                }
-
-                Section {
-                    TextField("Caster host", text: $profile.host)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    TextField("Port", value: $profile.port, format: .number)
-                        .keyboardType(.numberPad)
-                    TextField("Mount point", text: $profile.mountPoint)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    TextField("Username", text: $profile.username)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    SecureField("Password", text: $profile.password)
-                    Toggle("Report position to caster", isOn: $profile.sendPositionToCaster)
-                } header: {
-                    Text("NTRIP caster")
-                } footer: {
-                    Text("Most VRS networks stop sending corrections unless the rover keeps "
-                         + "reporting where it is. Leave this on unless your caster says otherwise.")
-                        .font(Theme.Typeface.caption)
-                }
-
-                Section {
-                    LabeledContent("Forward (X)") {
-                        TextField("m", value: $profile.leverArmX, format: .number)
-                            .keyboardType(.numbersAndPunctuation)
-                            .multilineTextAlignment(.trailing)
-                    }
-                    LabeledContent("Up (Y)") {
-                        TextField("m", value: $profile.leverArmY, format: .number)
-                            .keyboardType(.numbersAndPunctuation)
-                            .multilineTextAlignment(.trailing)
-                    }
-                    LabeledContent("Right (Z)") {
-                        TextField("m", value: $profile.leverArmZ, format: .number)
-                            .keyboardType(.numbersAndPunctuation)
-                            .multilineTextAlignment(.trailing)
-                    }
-                    LabeledContent("Antenna height") {
-                        TextField("m", value: $profile.antennaHeight, format: .number)
-                            .keyboardType(.numbersAndPunctuation)
-                            .multilineTextAlignment(.trailing)
-                    }
-                } header: {
-                    Text("Antenna offset")
-                } footer: {
-                    Text("Offset from the antenna phase centre to the camera, in device axes. "
-                         + "This does not average out: getting it wrong shifts every point in "
-                         + "the capture by exactly the same amount, so the residuals stay small "
-                         + "and the whole scan is in the wrong place.")
-                        .font(Theme.Typeface.caption)
-                }
-            }
-            .scrollContentBackground(.hidden)
-            .background(Theme.Palette.background)
-            .navigationTitle("RTK profile")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        onSave(profile)
-                        dismiss()
-                    }
-                }
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-            }
-        }
     }
 }

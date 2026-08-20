@@ -244,6 +244,16 @@ final class GnssManager: NSObject, ObservableObject {
         ))
     }
 
+    /// Take the settings a profile carries about the physical setup.
+    ///
+    /// The lever arm was editable in the profile screen and reached nothing:
+    /// the field was written to disk and read by no one, so a carefully
+    /// measured pole offset was applied to precisely zero captures. It is
+    /// applied here, from the profile in use.
+    func apply(_ profile: RtkProfile) {
+        leverArm = SIMD3(profile.leverArmX, profile.leverArmY, profile.leverArmZ)
+    }
+
     // MARK: - NTRIP
 
     func startNtrip(profile: RtkProfile) {
