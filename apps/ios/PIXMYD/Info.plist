@@ -49,7 +49,7 @@
   <!--
     Bonjour types the receiver scan browses for. iOS does not merely ignore an
     unlisted type: it returns no results for it, which is indistinguishable
-    from nothing being there. Every type in ReceiverScanner.bonjourTypes has to
+    from nothing being there. Every type in ReceiverBonjour.types has to
     appear here, and adding one there means adding it here too.
   -->
   <key>NSBonjourServices</key>

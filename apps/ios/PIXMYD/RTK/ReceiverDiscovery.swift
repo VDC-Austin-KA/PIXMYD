@@ -132,6 +132,38 @@ enum ReceiverVendor: String, CaseIterable, Sendable {
     }
 }
 
+// MARK: - Role
+
+/// What a thing found on the network actually is.
+///
+/// The scan finds two kinds of device and they are not interchangeable. A rover
+/// sends positions to the phone; a caster sends corrections to the rover. They
+/// are found by the same Bonjour browse and look identical in a list, and
+/// connecting to a caster as though it were a rover produces a link that opens,
+/// delivers RTCM the app cannot use, and never yields a position.
+enum ReceiverRole: String, Codable, Sendable {
+    /// A receiver that reports where it is.
+    case rover
+    /// An NTRIP caster: a source of corrections, which belongs in a profile's
+    /// caster field rather than on the end of a position link.
+    case caster
+
+    /// The Bonjour service types that mean "this is a correction source".
+    static func of(bonjourType: String) -> ReceiverRole {
+        bonjourType.hasPrefix("_ntrip") ? .caster : .rover
+    }
+}
+
+/// The Bonjour service types the scan browses.
+///
+/// Every one of these must also be listed in `NSBonjourServices` in Info.plist:
+/// iOS does not merely refuse an unlisted type, it returns no results for it,
+/// which looks exactly like nothing being there. Kept here rather than on the
+/// scanner so the list and the rule that classifies it can be tested together.
+enum ReceiverBonjour {
+    static let types = ["_ntrip._tcp", "_nmea._tcp", "_gnss._tcp", "_reach._tcp"]
+}
+
 // MARK: - A found device
 
 /// One device seen by a scan.
@@ -158,6 +190,9 @@ struct DiscoveredReceiver: Identifiable, Equatable, Hashable, Sendable {
     /// True when the device advertises a serial-style service this app knows
     /// how to read. A far better signal than the name, when it is present.
     var advertisesSerialService: Bool = false
+    /// Whether this is something to take positions from, or something to take
+    /// corrections from.
+    var role: ReceiverRole = .rover
     var lastSeen: Date = .distantPast
 
     var id: String { "\(link.rawValue):\(identifier)" }
@@ -167,11 +202,15 @@ struct DiscoveredReceiver: Identifiable, Equatable, Hashable, Sendable {
         return "Unnamed \(link.label.lowercased()) device"
     }
 
-    /// Whether this looks like a GNSS receiver rather than a pair of earbuds.
+    /// Whether this looks like GNSS equipment rather than a pair of earbuds.
     ///
     /// Used only to decide what to show first and what to hide behind "show
     /// everything". A device that fails this test is still connectable.
     var isLikelyReceiver: Bool { vendor != nil || advertisesSerialService }
+
+    /// Whether a position link can be opened to it. A caster is listed, and
+    /// named, but there is nothing to connect a rover link to.
+    var isConnectableAsRover: Bool { role == .rover }
 
     /// Signal strength as 0–4 bars, or nil when the link cannot measure it.
     ///

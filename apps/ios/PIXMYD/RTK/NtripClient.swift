@@ -1,37 +1,6 @@
 import Foundation
 import Network
 
-/// A saved RTK receiver configuration.
-struct RtkProfile: Identifiable, Codable, Equatable, Hashable {
-    var id = UUID()
-    var name: String = "New profile"
-
-    // NTRIP caster
-    var host: String = ""
-    var port: Int = 2101
-    var mountPoint: String = ""
-    var username: String = ""
-    var password: String = ""
-    /// Send the receiver's own position to the caster, which most VRS networks
-    /// require in order to generate a correction stream for your location.
-    var sendPositionToCaster = true
-
-    /// Antenna phase centre relative to the camera, device body axes, metres.
-    /// Positive Y is up the pole.
-    var leverArmX: Double = 0
-    var leverArmY: Double = 0
-    var leverArmZ: Double = 0
-
-    /// Antenna height measured from the ground mark to the phase centre. Kept
-    /// separate from the lever arm because a surveyor measures and records it
-    /// separately, and conflating them is how the two get added twice.
-    var antennaHeight: Double = 0
-
-    var isComplete: Bool {
-        !host.isEmpty && !mountPoint.isEmpty
-    }
-}
-
 /// Minimal NTRIP v1 client.
 ///
 /// NTRIP is HTTP-shaped but not HTTP: the caster replies `ICY 200 OK` and then
@@ -238,5 +207,151 @@ final class NtripClient: @unchecked Sendable {
 
     private func setState(_ state: State) {
         onStateChange?(state)
+    }
+}
+
+// MARK: - Source table
+
+/// One request for a caster's source table.
+///
+/// A request for `/` returns the table rather than a stream — the same
+/// behaviour that makes a wrong mount point so baffling mid-connection is,
+/// here, exactly what is wanted. The point is to stop the mount point being
+/// something a user types from memory: the caster already knows what it
+/// serves, including which streams need a position report, and asking it is
+/// cheaper than getting it wrong on site.
+///
+/// A class rather than a function with captured state: the network callbacks
+/// are `@Sendable`, so a buffer accumulated across several reads cannot be a
+/// local variable. It holds itself alive until it finishes, because nothing
+/// else has a reason to.
+final class NtripSourceTableProbe: @unchecked Sendable {
+
+    enum Failure: Error, Equatable {
+        case message(String)
+
+        var label: String {
+            switch self {
+            case .message(let reason): reason
+            }
+        }
+    }
+
+    private let connection: NWConnection
+    private let queue = DispatchQueue(label: "com.pixmyd.ntrip.sourcetable")
+    private let username: String
+    private let password: String
+    private let timeout: TimeInterval
+
+    private var received = Data()
+    private var finished = false
+    private var completion: ((Result<[NtripMountPoint], Failure>) -> Void)?
+    private var keepAlive: NtripSourceTableProbe?
+
+    init?(host: String, port: Int, username: String, password: String, timeout: TimeInterval = 12) {
+        let trimmed = host.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty,
+              let port16 = UInt16(exactly: port),
+              let endpointPort = NWEndpoint.Port(rawValue: port16)
+        else { return nil }
+
+        self.connection = NWConnection(
+            to: .hostPort(host: NWEndpoint.Host(trimmed), port: endpointPort),
+            using: .tcp
+        )
+        self.username = username
+        self.password = password
+        self.timeout = timeout
+    }
+
+    /// - Parameter completion: called exactly once, on the main queue.
+    func start(completion: @escaping (Result<[NtripMountPoint], Failure>) -> Void) {
+        self.completion = completion
+        keepAlive = self
+
+        connection.stateUpdateHandler = { [weak self] state in
+            guard let self else { return }
+            switch state {
+            case .ready:
+                self.sendRequest()
+                self.receive()
+            case .failed(let error), .waiting(let error):
+                self.finish(.failure(.message(error.localizedDescription)))
+            default:
+                break
+            }
+        }
+        connection.start(queue: queue)
+
+        // A caster that accepts the connection and then says nothing would
+        // otherwise leave a spinner turning for ever.
+        queue.asyncAfter(deadline: .now() + timeout) { [weak self] in
+            self?.finish(.failure(.message("The caster did not answer.")))
+        }
+    }
+
+    private func sendRequest() {
+        let credentials = Data("\(username):\(password)".utf8).base64EncodedString()
+        let request = """
+        GET / HTTP/1.0\r
+        User-Agent: NTRIP PIXMYD/\(Bundle.main.shortVersion)\r
+        Accept: */*\r
+        Authorization: Basic \(credentials)\r
+        Connection: close\r
+        \r
+
+        """
+        connection.send(content: Data(request.utf8), completion: .idempotent)
+    }
+
+    private func receive() {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 16384) {
+            [weak self] data, _, isComplete, error in
+            guard let self else { return }
+            if let data { self.received.append(data) }
+            if let error {
+                self.finish(.failure(.message(error.localizedDescription)))
+                return
+            }
+            if isComplete {
+                self.finish(Self.interpret(self.received))
+                return
+            }
+            self.receive()
+        }
+    }
+
+    private func finish(_ result: Result<[NtripMountPoint], Failure>) {
+        queue.async {
+            guard !self.finished else { return }
+            self.finished = true
+            self.connection.cancel()
+            let completion = self.completion
+            self.completion = nil
+            DispatchQueue.main.async {
+                completion?(result)
+                self.keepAlive = nil
+            }
+        }
+    }
+
+    private static func interpret(_ data: Data) -> Result<[NtripMountPoint], Failure> {
+        // Latin-1 never fails, and a source table is ASCII apart from the
+        // occasional accented place name. Insisting on UTF-8 would throw away
+        // a whole table for one stray byte in a station description.
+        let text = String(data: data, encoding: .utf8)
+            ?? String(data: data, encoding: .isoLatin1)
+            ?? ""
+        guard !text.isEmpty else {
+            return .failure(.message("The caster sent nothing back."))
+        }
+        let mountPoints = NtripSourceTable.parse(text)
+        if mountPoints.isEmpty {
+            if text.contains("401") {
+                return .failure(.message("Caster rejected the username or password."))
+            }
+            return .failure(.message("The caster answered, but its reply lists no mount points."))
+        }
+        return .success(mountPoints)
     }
 }

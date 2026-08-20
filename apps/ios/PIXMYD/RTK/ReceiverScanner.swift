@@ -63,12 +63,6 @@ final class ReceiverScanner: NSObject, ObservableObject {
         didSet { publish() }
     }
 
-    /// Bonjour types worth browsing.
-    ///
-    /// Every one of these must also be listed in `NSBonjourServices` in
-    /// Info.plist: iOS does not merely refuse an unlisted type, it returns no
-    /// results for it, which looks exactly like nothing being there.
-    static let bonjourTypes = ["_ntrip._tcp", "_nmea._tcp", "_gnss._tcp", "_reach._tcp"]
 
     private var list = ReceiverList()
     private var lastPublish = Date.distantPast
@@ -194,7 +188,7 @@ final class ReceiverScanner: NSObject, ObservableObject {
 
     private func startBonjourBrowsers() {
         browsers.forEach { $0.cancel() }
-        browsers = Self.bonjourTypes.map { type in
+        browsers = ReceiverBonjour.types.map { type in
             let parameters = NWParameters()
             parameters.includePeerToPeer = true
             let browser = NWBrowser(
@@ -242,14 +236,18 @@ final class ReceiverScanner: NSObject, ObservableObject {
         for result in results {
             guard case let .service(name, serviceType, domain, _) = result.endpoint else { continue }
             let identifier = "\(name).\(serviceType)\(domain)"
+            let role = ReceiverRole.of(bonjourType: serviceType)
             let found = DiscoveredReceiver(
                 link: .wifi,
                 identifier: identifier,
                 name: name,
                 vendor: ReceiverVendor.identify(name),
                 rssi: nil,
-                detail: "\(serviceType) on the local network",
+                detail: role == .caster
+                    ? "NTRIP caster on the local network"
+                    : "\(serviceType) on the local network",
                 advertisesSerialService: true,
+                role: role,
                 lastSeen: Date()
             )
             seen.insert(found.id)
@@ -363,6 +361,88 @@ final class ReceiverScanner: NSObject, ObservableObject {
                 accessory: entry.accessory,
                 protocolString: entry.protocolString
             )
+        }
+    }
+
+    /// Rebuild a link to a receiver saved in a profile, without a scan.
+    ///
+    /// This is what makes a profile worth having. Each link can be re-opened
+    /// from what was written down, by a different route in each case:
+    ///
+    /// - **Bluetooth**: `retrievePeripherals` hands back a peripheral the
+    ///   system already knows by its identifier. No scan, no advertising
+    ///   packet, no waiting — which matters because a receiver that is already
+    ///   bonded may not advertise at all.
+    /// - **Wi-Fi**: the address was saved, so the socket can be opened
+    ///   directly.
+    /// - **MFi**: matched by name among the attached accessories, because iOS
+    ///   issues a new connection ID each time one is plugged in and the
+    ///   identifier saved last week refers to nothing today.
+    func transport(forSaved saved: SavedReceiver) -> ReceiverTransport? {
+        let receiver = saved.descriptor
+
+        switch saved.link {
+        case .bluetooth:
+            guard let central, let uuid = UUID(uuidString: saved.identifier) else { return nil }
+            let known = central.retrievePeripherals(withIdentifiers: [uuid])
+            guard let peripheral = known.first else { return nil }
+            peripherals[receiver.id] = peripheral
+            let transport = BluetoothTransport(
+                receiver: receiver,
+                peripheral: peripheral,
+                central: central
+            )
+            bluetoothTransport = transport
+            return transport
+
+        case .wifi:
+            if let endpoint = endpoints[receiver.id] {
+                return TcpTransport(receiver: receiver, endpoint: endpoint)
+            }
+            guard let host = saved.host,
+                  let port16 = UInt16(exactly: saved.port ?? ReceiverEndpoint.defaultPort),
+                  let port = NWEndpoint.Port(rawValue: port16)
+            else { return nil }
+            let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(host), port: port)
+            endpoints[receiver.id] = endpoint
+            return TcpTransport(receiver: receiver, endpoint: endpoint)
+
+        case .mfi:
+            refreshAccessories()
+            guard let entry = accessories.values.first(where: { $0.accessory.name == saved.name })
+            else { return nil }
+            // The descriptor is rebuilt from the accessory that is attached
+            // now, so the connection ID on screen is this session's rather than
+            // the one that was saved.
+            let attached = DiscoveredReceiver(
+                link: .mfi,
+                identifier: String(entry.accessory.connectionID),
+                name: entry.accessory.name,
+                vendor: ReceiverVendor.identify(entry.accessory.name),
+                detail: entry.accessory.manufacturer,
+                advertisesSerialService: true,
+                lastSeen: Date()
+            )
+            return AccessoryTransport(
+                receiver: attached,
+                accessory: entry.accessory,
+                protocolString: entry.protocolString
+            )
+        }
+    }
+
+    /// Why a saved receiver could not be re-opened, in words that name the fix.
+    func reasonSavedReceiverIsUnavailable(_ saved: SavedReceiver) -> String {
+        switch saved.link {
+        case .bluetooth:
+            bluetooth.isReady
+                ? "\(saved.name) is not paired with this phone any more. Scan for it again."
+                : (bluetooth.explanation ?? "Bluetooth is unavailable.")
+        case .wifi:
+            "\(saved.name) is not reachable at \(saved.addressLabel ?? "its saved address"). "
+                + "Join the network it is on, or scan again."
+        case .mfi:
+            "\(saved.name) is not attached to this phone."
         }
     }
 

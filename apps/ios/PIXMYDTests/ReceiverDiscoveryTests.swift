@@ -27,6 +27,38 @@ final class ReceiverVendorTests: XCTestCase {
     }
 }
 
+final class ReceiverRoleTests: XCTestCase {
+
+    func testAnNtripServiceIsACorrectionSourceNotAReceiver() {
+        // Both come out of the same Bonjour browse and look identical in a
+        // list. Connecting a rover link to a caster opens, delivers RTCM the
+        // app cannot use, and never produces a position.
+        XCTAssertEqual(ReceiverRole.of(bonjourType: "_ntrip._tcp"), .caster)
+        XCTAssertEqual(ReceiverRole.of(bonjourType: "_nmea._tcp"), .rover)
+        XCTAssertEqual(ReceiverRole.of(bonjourType: "_gnss._tcp"), .rover)
+        XCTAssertEqual(ReceiverRole.of(bonjourType: "_reach._tcp"), .rover)
+    }
+
+    func testEveryBrowsedTypeIsClassifiedAndOnlyNtripIsACaster() {
+        // Guards the pairing: adding a browse type without deciding what it is
+        // would silently make it a rover.
+        let casters = ReceiverBonjour.types.filter {
+            ReceiverRole.of(bonjourType: $0) == .caster
+        }
+        XCTAssertEqual(casters, ["_ntrip._tcp"])
+    }
+
+    func testACasterIsNotOfferedAsAPositionSource() {
+        var caster = DiscoveredReceiver(link: .wifi, identifier: "base._ntrip._tcplocal.",
+                                        name: "Site base")
+        caster.role = .caster
+        XCTAssertFalse(caster.isConnectableAsRover)
+
+        let rover = DiscoveredReceiver(link: .wifi, identifier: "rover", name: "rover")
+        XCTAssertTrue(rover.isConnectableAsRover)
+    }
+}
+
 final class ReceiverListTests: XCTestCase {
 
     private func ble(

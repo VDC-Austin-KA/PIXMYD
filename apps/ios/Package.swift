@@ -43,6 +43,8 @@ let portableSources = [
     "Export/WebPageExport.swift",
     "RTK/NmeaAssembler.swift",
     "RTK/ReceiverDiscovery.swift",
+    "RTK/RtkProfile.swift",
+    "RTK/NtripSourceTable.swift",
 ]
 
 // The rest of the app: SwiftUI screens, the ARKit session, the CoreLocation and
@@ -78,6 +80,7 @@ let unportableFiles = [
     "RTK/NtripClient.swift",
     "RTK/ReceiverScanner.swift",
     "RTK/ReceiverScanView.swift",
+    "RTK/RtkSettingsView.swift",
     "RTK/ReceiverTransport.swift",
     "Survey/SurveyView.swift",
 ]

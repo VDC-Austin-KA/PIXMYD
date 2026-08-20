@@ -123,14 +123,18 @@ for grading the result.
 and antenna offsets, AR display options, and a plain statement of what this
 device can do.
 
-**Scan mode.** Finding a receiver over the air, reachable from the Account tab,
-from the capture screen's tools sheet, and by tapping the position badge while
-scanning. Three searches run at once — a Bluetooth LE scan, a Bonjour browse of
-the network the phone is joined to, and the list of attached MFi accessories —
-because a receiver announces itself on exactly one of them and the user should
-not have to know which. A `host:port` can also be typed, which is the normal
-case rather than a fallback: a rover in access-point mode with a raw TCP output
-advertises nothing at all.
+**RTK.** One screen for the receiver and its corrections, reached from the
+Account tab. Scanning is the first thing on it, not a preference buried among
+the others; the capture screen carries the same action as a labelled button
+under the position badge, and the tools sheet links to it too.
+
+**Scan mode.** Three searches run at once — a Bluetooth LE scan, a Bonjour
+browse of the network the phone is joined to, and the list of attached MFi
+accessories — because a receiver announces itself on exactly one of them and the
+user should not have to know which. A `host:port` can also be typed, which is
+the normal case rather than a fallback: a rover in access-point mode with a raw
+TCP output advertises nothing at all. Connecting writes the device into an RTK
+profile on the spot.
 
 ## Design decisions worth knowing
 
@@ -162,6 +166,17 @@ decimetres out. The badge shows the fix type in words, not a bar count, because
 every receiver shows four bars for both. HDOP is labelled HDOP, never
 "accuracy" — it is a satellite-geometry factor, and presenting it as an accuracy
 would be a lie the user cannot detect.
+
+**A profile is filled in from both ends, and only one end is discoverable.**
+The receiver half — device, link, address — is written by the scan, because
+asking someone to transcribe what the phone has just found out is asking them to
+make a typo. The caster half cannot be discovered at all: corrections come from
+a subscription, and no amount of scanning reveals an account. What it *can* do
+is read the caster's own source table, so the mount point is picked from a list
+rather than typed from memory — along with whether that stream needs a position
+report, which the table states and which is the difference between a VRS that
+works and one that goes quiet after a minute. With a fix, the list is ordered
+nearest first.
 
 **Connecting is not the same as working.** A link that opens and then delivers
 something unreadable presents to the user as "it connected and there is no

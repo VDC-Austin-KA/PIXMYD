@@ -10,6 +10,7 @@ import SwiftUI
 /// rather than showing an empty list and a spinner.
 struct ReceiverScanView: View {
     @EnvironmentObject private var gnss: GnssManager
+    @EnvironmentObject private var settings: AppSettings
     /// The scanner belongs to the app, not to this screen — see the note in
     /// `PIXMYDApp`. Scanning stops when the screen goes away; the radio and any
     /// link it opened do not.
@@ -18,6 +19,9 @@ struct ReceiverScanView: View {
     @State private var manualAddress = ""
     @State private var manualProblem: String?
     @State private var connectProblem: String?
+    /// The profile the last connection was written into, so the screen can say
+    /// where it went rather than saving something invisibly.
+    @State private var savedProfileName: String?
 
     var body: some View {
         ScrollView {
@@ -32,7 +36,7 @@ struct ReceiverScanView: View {
             .padding(Theme.Metrics.gutter)
         }
         .background(Theme.Palette.background)
-        .navigationTitle("Scan for receivers")
+        .navigationTitle("Scan for RTK devices")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { scanner.start() }
         .onDisappear { scanner.stop() }
@@ -98,6 +102,15 @@ struct ReceiverScanView: View {
                               + "NTRIP will not reach it.", systemImage: "arrow.up.left.circle")
                             .font(Theme.Typeface.caption)
                             .foregroundStyle(Theme.Palette.caution)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    if let savedProfileName {
+                        Label("Saved to the RTK profile \u{201C}\(savedProfileName)\u{201D}. Its "
+                              + "caster details, if any, are untouched.",
+                              systemImage: "square.and.arrow.down")
+                            .font(Theme.Typeface.caption)
+                            .foregroundStyle(Theme.Palette.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
@@ -222,18 +235,24 @@ struct ReceiverScanView: View {
                         Text("Show every Bluetooth device")
                             .font(Theme.Typeface.label(14, weight: .medium))
                             .foregroundStyle(Theme.Palette.text)
-                        Text(scanner.hiddenCount == 0
-                             ? "Nothing is being hidden."
-                             : "\(scanner.hiddenCount) nearby device"
-                                + (scanner.hiddenCount == 1 ? "" : "s")
-                                + " did not look like a receiver and "
-                                + (scanner.hiddenCount == 1 ? "is" : "are") + " hidden.")
+                        Text(hiddenSummary)
                             .font(Theme.Typeface.caption)
                             .foregroundStyle(Theme.Palette.textSecondary)
                     }
                 }
             }
         }
+    }
+
+    /// Written out as statements rather than inline in the `Text`: the inlined
+    /// version mixed interpolation, `+` and two ternaries in one expression,
+    /// which the type checker could not solve in reasonable time.
+    private var hiddenSummary: String {
+        let count: Int = scanner.hiddenCount
+        if count == 0 { return "Nothing is being hidden." }
+        let noun: String = count == 1 ? "device" : "devices"
+        let verb: String = count == 1 ? "is" : "are"
+        return "\(count) nearby \(noun) did not look like a receiver and \(verb) hidden."
     }
 
     // MARK: - Manual endpoint
@@ -289,11 +308,23 @@ struct ReceiverScanView: View {
 
     private func connect(_ receiver: DiscoveredReceiver) {
         connectProblem = nil
+        guard receiver.isConnectableAsRover else {
+            // A caster hands out corrections; it has no position to give. The
+            // link would open, deliver RTCM, and never produce a fix.
+            connectProblem = "\(receiver.displayName) is an NTRIP caster, not a receiver. "
+                + "Put it in an RTK profile as the correction source instead."
+            return
+        }
         guard let transport = scanner.transport(for: receiver) else {
             connectProblem = "\(receiver.displayName) is no longer reachable. Scan again."
             return
         }
         gnss.connect(transport)
+        // Written down immediately, not on some later "save" the user has to
+        // find: what the scan learned — the device, its link, its address — is
+        // exactly what the profile screen would otherwise ask them to type.
+        // Their caster, credentials and antenna offsets are never touched.
+        savedProfileName = settings.remember(SavedReceiver(receiver)).name
     }
 
     private func connectManually() {
@@ -364,6 +395,9 @@ private struct ReceiverRow: View {
 
                 if isConnected {
                     StatusChip(text: "In use", tone: .good, systemImage: "checkmark")
+                } else if receiver.role == .caster {
+                    StatusChip(text: "Corrections", tone: .neutral,
+                               systemImage: "antenna.radiowaves.left.and.right")
                 } else if let bars = receiver.signalBars {
                     SignalBars(bars: bars, rssi: receiver.rssi)
                 }
@@ -378,6 +412,9 @@ private struct ReceiverRow: View {
     }
 
     private var subtitle: String {
+        if receiver.role == .caster {
+            return "Correction source — add it to an RTK profile as the caster"
+        }
         var parts: [String] = [receiver.link.label]
         if let vendor = receiver.vendor { parts.append(vendor.label) }
         if let detail = receiver.detail { parts.append(detail) }

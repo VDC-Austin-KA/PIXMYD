@@ -89,7 +89,7 @@ struct ToolsSheet: View {
                                     .frame(width: 28)
                                     .foregroundStyle(Theme.Palette.accent)
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text("Scan for a receiver")
+                                    Text("Scan for nearby RTK devices")
                                         .font(Theme.Typeface.label(16, weight: .semibold))
                                         .foregroundStyle(Theme.Palette.text)
                                     Text("Looks for an RTK receiver over Bluetooth or Wi-Fi and "
