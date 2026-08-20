@@ -235,18 +235,24 @@ struct ReceiverScanView: View {
                         Text("Show every Bluetooth device")
                             .font(Theme.Typeface.label(14, weight: .medium))
                             .foregroundStyle(Theme.Palette.text)
-                        Text(scanner.hiddenCount == 0
-                             ? "Nothing is being hidden."
-                             : "\(scanner.hiddenCount) nearby device"
-                                + (scanner.hiddenCount == 1 ? "" : "s")
-                                + " did not look like a receiver and "
-                                + (scanner.hiddenCount == 1 ? "is" : "are") + " hidden.")
+                        Text(hiddenSummary)
                             .font(Theme.Typeface.caption)
                             .foregroundStyle(Theme.Palette.textSecondary)
                     }
                 }
             }
         }
+    }
+
+    /// Written out as statements rather than inline in the `Text`: the inlined
+    /// version mixed interpolation, `+` and two ternaries in one expression,
+    /// which the type checker could not solve in reasonable time.
+    private var hiddenSummary: String {
+        let count: Int = scanner.hiddenCount
+        if count == 0 { return "Nothing is being hidden." }
+        let noun: String = count == 1 ? "device" : "devices"
+        let verb: String = count == 1 ? "is" : "are"
+        return "\(count) nearby \(noun) did not look like a receiver and \(verb) hidden."
     }
 
     // MARK: - Manual endpoint
