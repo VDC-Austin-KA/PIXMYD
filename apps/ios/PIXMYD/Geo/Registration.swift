@@ -70,6 +70,10 @@ struct RigidSolution {
     var pairCount: Int
     /// The input pairs, so leave-one-out diagnostics can refit without them.
     var pairs: [ControlPair]
+    /// True when the vertical was held from gravity rather than fitted. The
+    /// consumer shows this: a two-point fit and a six-point fit are not the
+    /// same claim, and the RMS alone does not say which one it is.
+    var verticalHeld: Bool = false
 }
 
 struct SolveOptions {
@@ -90,6 +94,8 @@ struct SolveOptions {
 enum RegistrationError: Error, CustomStringConvertible, Equatable {
     case tooFewPairs(count: Int)
     case degenerateControl
+    case tooFewPairsForGravity(count: Int)
+    case verticalBaseline
 
     var description: String {
         switch self {
@@ -100,6 +106,13 @@ enum RegistrationError: Error, CustomStringConvertible, Equatable {
             return "control points are collinear or coincident — a rigid transform is not " +
                 "determined. Spread control across at least three non-collinear positions, " +
                 "and prefer points that differ in height."
+        case .tooFewPairsForGravity(let count):
+            return "holding the vertical fixed still needs at least 2 control points, got " +
+                "\(count). One point fixes where the scan sits and nothing about which way " +
+                "it faces."
+        case .verticalBaseline:
+            return "these control points sit in a vertical line, so holding the vertical " +
+                "leaves the heading undetermined. Locate a point somewhere else on the floor."
         }
     }
 }
@@ -340,6 +353,240 @@ func solveRigidTransform(_ pairs: [ControlPair], options: SolveOptions = SolveOp
 
 func applyTransform(rotation: Quat, translation: SIMD3<Double>, scale: Double, _ p: SIMD3<Double>) -> SIMD3<Double> {
     rotation.rotate(p) * scale + translation
+}
+
+// MARK: - Solve with the vertical held
+
+/// Which way is up, in each of the two frames.
+///
+/// Named rather than inlined because the day something other than ARKit
+/// produces a capture, there is one place to look — and because a hard-coded
+/// `(0, 1, 0)` in the middle of a solver is indistinguishable from a bug.
+enum GravityFrame {
+    /// ARKit's world frame is gravity-aligned with +Y up, and every capture
+    /// this app produces comes from ARKit.
+    static let captureUp = SIMD3<Double>(0, 1, 0)
+
+    /// The up vector for a contract up-axis string. Anything unrecognised is
+    /// Z: that is what Navisworks documents use, and guessing Y for a typo
+    /// would lay a whole scan on its side.
+    static func up(forAxis axis: String) -> SIMD3<Double> {
+        switch axis.trimmingCharacters(in: .whitespaces).uppercased() {
+        case "Y": return SIMD3<Double>(0, 1, 0)
+        case "X": return SIMD3<Double>(1, 0, 0)
+        default:  return SIMD3<Double>(0, 0, 1)
+        }
+    }
+
+    /// Two points determine heading and translation. One does not.
+    static let minimumPairs = 2
+
+    /// What a fit from this many points can and cannot tell you.
+    ///
+    /// Shown beside the RMS, because an RMS from two points is a number with
+    /// no redundancy behind it: it is near zero by construction whether the
+    /// points were right or wrong, and a user who reads "0 mm" without this
+    /// line will trust it more than a 4 mm fit from six points that is the
+    /// better answer.
+    static func redundancyGuidance(pairCount: Int) -> String {
+        if pairCount <= 2 {
+            return "Two points fix the scan with the vertical held from gravity, but they leave "
+                 + "no redundancy: the fit reports near-zero error whether the points are right "
+                 + "or wrong. Locate a third to get an error you can believe."
+        }
+        if pairCount == 3 {
+            return "Three points give one check on the fit. A blunder in any of them raises the "
+                 + "error but cannot yet be told apart from the other two."
+        }
+        return "Four or more points leave enough redundancy for a bad one to be identified "
+             + "rather than merely suspected."
+    }
+}
+
+/// Register a capture with the vertical held fixed.
+///
+/// `solveRigidTransform` fits all six degrees of freedom, so it needs three
+/// non-collinear pairs. On site that is the step that stops people: a crew has
+/// two column marks they can reach and a third behind a stack of drywall, and
+/// the app refuses.
+///
+/// It does not have to. Both frames already know which way down is — ARKit runs
+/// gravity-aligned, and a model states its up axis — so fixing the vertical
+/// removes roll and pitch and leaves four unknowns that two points
+/// over-determine.
+///
+/// This is not a lower-quality answer. Gravity from an IMU is better
+/// conditioned than roll and pitch fitted from three hand-aimed picks, and this
+/// solve is often the right one at five points too. What two points cannot do
+/// is tell you when one of them is wrong — see `GravityFrame
+/// .redundancyGuidance`, which the UI shows verbatim.
+///
+/// Closed form, no iteration:
+///
+///   1. rotate the capture's up onto the model's, by the shortest arc
+///   2. solve the one remaining angle about that axis:
+///      `theta = atan2(sum w U·(a×b), sum w a·b)` over the horizontal
+///      components, which is the exact weighted least-squares heading
+///   3. translation from the weighted centroids
+///
+/// Mirrors `PIXMYD-Nav/Core/Capture/GravitySolve.cs` vector for vector, and
+/// shares its test vectors so the two cannot drift.
+func solveGravityConstrained(
+    _ pairs: [ControlPair],
+    captureUp: SIMD3<Double> = GravityFrame.captureUp,
+    projectUp: SIMD3<Double> = SIMD3<Double>(0, 0, 1),
+    options: SolveOptions = SolveOptions()
+) throws -> RigidSolution {
+    guard pairs.count >= GravityFrame.minimumPairs else {
+        throw RegistrationError.tooFewPairsForGravity(count: pairs.count)
+    }
+
+    let up = normalisedOrZero(projectUp)
+    let sourceUp = normalisedOrZero(captureUp)
+    guard simd_length(up) > 0.5, simd_length(sourceUp) > 0.5 else {
+        throw RegistrationError.degenerateControl
+    }
+
+    let weights = pairs.map { p -> Double in
+        if options.useWeights, let sigma = p.sigma, sigma > 0 { return 1 / (sigma * sigma) }
+        return 1
+    }
+
+    // 1. Level the capture. Everything after this happens in a frame whose
+    //    vertical is already right.
+    let levelling = Quat.shortestArc(from: sourceUp, to: up)
+    let levelled = pairs.map { levelling.rotate($0.observed) }
+    let targets = pairs.map { $0.project }
+
+    let centreSource = weightedCentroid(levelled, weights)
+    let centreTarget = weightedCentroid(targets, weights)
+
+    // 2. Heading, in closed form, from the horizontal components only. The
+    //    vertical components carry no information about a rotation around the
+    //    vertical, and including them would let a height difference bias it.
+    var numerator = 0.0
+    var denominator = 0.0
+    var horizontalWeight = 0.0
+    for i in 0..<pairs.count {
+        let a = horizontal(levelled[i] - centreSource, up)
+        let b = horizontal(targets[i] - centreTarget, up)
+        numerator += weights[i] * simd_dot(up, simd_cross(a, b))
+        denominator += weights[i] * simd_dot(a, b)
+        horizontalWeight += weights[i] * simd_length(a) * simd_length(b)
+    }
+
+    guard horizontalWeight > 1e-9 else {
+        throw RegistrationError.verticalBaseline
+    }
+
+    let heading = Quat.fromAxisAngle(up, atan2(numerator, denominator))
+
+    // 3. Compose. The levelling happens first, so it is the right-hand factor.
+    let rotation = Quat.multiply(heading, levelling)
+    let translation = centreTarget - heading.rotate(centreSource)
+
+    // Scale stays at 1 whatever the options say: a capture and a model are both
+    // metric, and a constrained solve exists to keep error visible rather than
+    // to absorb it into another fitted parameter.
+    let scale = 1.0
+
+    var residuals: [Residual] = []
+    residuals.reserveCapacity(pairs.count)
+    var sumSq = 0.0
+    var maxError = 0.0
+    for pair in pairs {
+        let mapped = applyTransform(
+            rotation: rotation, translation: translation, scale: scale, pair.observed)
+        let delta = mapped - pair.project
+        let error = simd_length(delta)
+        residuals.append(Residual(id: pair.id, error: error, delta: delta))
+        sumSq += error * error
+        if error > maxError { maxError = error }
+    }
+
+    return RigidSolution(
+        rotation: rotation,
+        translation: translation,
+        scale: scale,
+        matrix: composeMatrix(translation: translation, rotation: rotation, scale: scale),
+        rmsError: (sumSq / Double(residuals.count)).squareRoot(),
+        maxError: maxError,
+        residuals: residuals,
+        pairCount: pairs.count,
+        pairs: pairs,
+        verticalHeld: true
+    )
+}
+
+/// Solve with whichever method the data supports.
+///
+/// Three or more pairs get Horn's unconstrained solve, which is what every
+/// number in `docs/contracts/capture.md` has always meant. Two get the
+/// gravity-constrained one. Below two there is nothing to do.
+///
+/// `forceGravity` is for the operator who knows better than the residuals:
+/// three hand-aimed picks fit a tilt more readily than an IMU gets gravity
+/// wrong, so holding the vertical is often the better answer even when Horn's
+/// is available.
+func solveBestAvailable(
+    _ pairs: [ControlPair],
+    captureUp: SIMD3<Double> = GravityFrame.captureUp,
+    projectUp: SIMD3<Double> = SIMD3<Double>(0, 0, 1),
+    forceGravity: Bool = false,
+    options: SolveOptions = SolveOptions()
+) throws -> RigidSolution {
+    if forceGravity || pairs.count < 3 {
+        return try solveGravityConstrained(
+            pairs, captureUp: captureUp, projectUp: projectUp, options: options)
+    }
+    return try solveRigidTransform(pairs, options: options)
+}
+
+// MARK: - Vector helpers for the constrained solve
+
+private func horizontal(_ v: SIMD3<Double>, _ up: SIMD3<Double>) -> SIMD3<Double> {
+    v - up * simd_dot(v, up)
+}
+
+private func normalisedOrZero(_ v: SIMD3<Double>) -> SIMD3<Double> {
+    let length = simd_length(v)
+    return length < 1e-15 ? SIMD3<Double>(0, 0, 0) : v / length
+}
+
+extension Quat {
+    /// The shortest rotation carrying one unit vector onto another.
+    static func shortestArc(from: SIMD3<Double>, to: SIMD3<Double>) -> Quat {
+        let a = normalisedOrZero(from)
+        let b = normalisedOrZero(to)
+        let cosine = simd_dot(a, b)
+
+        // Opposed: every rotation through 180 degrees is equally short, so pick
+        // one perpendicular axis deterministically rather than letting a
+        // near-zero cross product choose it out of rounding noise.
+        if cosine < -0.999999 {
+            return Quat.fromAxisAngle(anyPerpendicular(a), .pi)
+        }
+
+        let axis = simd_cross(a, b)
+        return Quat(x: axis.x, y: axis.y, z: axis.z, w: 1 + cosine).normalized()
+    }
+
+    /// Apply `b` first, then `a`.
+    static func multiply(_ a: Quat, _ b: Quat) -> Quat {
+        Quat(
+            x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+            y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+            z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+            w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z
+        ).normalized()
+    }
+}
+
+private func anyPerpendicular(_ v: SIMD3<Double>) -> SIMD3<Double> {
+    // Cross with whichever axis this vector is least aligned to, so the result
+    // is never near zero.
+    let axis = abs(v.x) < 0.9 ? SIMD3<Double>(1, 0, 0) : SIMD3<Double>(0, 1, 0)
+    return normalisedOrZero(simd_cross(v, axis))
 }
 
 // MARK: - Outliers

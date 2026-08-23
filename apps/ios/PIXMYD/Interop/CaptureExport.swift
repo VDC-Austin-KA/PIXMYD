@@ -153,35 +153,106 @@ struct CaptureDevice: Equatable {
     var hasLidar: Bool
 }
 
+/// Which frame the mesh beside a capture is written in.
+///
+/// It matters because a mesh already in model coordinates is appended and left
+/// alone, and a raw one has to be transformed. Applying the transform twice
+/// puts the scan exactly as far past the model as it was short of it, which
+/// looks like a solver bug and is not.
+enum CaptureGeometryFrame: String, Equatable {
+    /// The capture's own ARKit frame. The consumer applies the solution.
+    case capture
+    /// Model world coordinates: the phone baked the solution into the geometry
+    /// before writing it, so the consumer appends it and leaves it alone.
+    case model
+}
+
 /// Everything `capture.json` needs that is not derived from the solve.
 struct CaptureExportRequest {
     var captureId: String
     var capturedUtc: Date
     var device: CaptureDevice
-    /// The set the correspondences were taken against.
-    var pointSet: NavPointSet
+    /// The set from PIXMYD-Nav the correspondences were taken against, when
+    /// there is one. Nil for a capture whose points were placed on the phone —
+    /// which is the whole point of `fieldPoints` below.
+    var pointSet: NavPointSet?
+    /// Points placed on the phone, when there are any. They travel as their own
+    /// contract file beside the capture; this records that they exist and what
+    /// they are called.
+    var fieldPoints: FieldPointSet?
     var correspondences: [CaptureCorrespondence]
     /// Sibling filename of the mesh payload, and its size.
     var geometryFile: String
     var geometryBytes: Int
+    var geometryFrame: CaptureGeometryFrame
 
     init(
         captureId: String = UUID().uuidString,
         capturedUtc: Date = Date(),
         device: CaptureDevice,
-        pointSet: NavPointSet,
+        pointSet: NavPointSet? = nil,
+        fieldPoints: FieldPointSet? = nil,
         correspondences: [CaptureCorrespondence],
-        geometryFile: String = "capture.glb",
-        geometryBytes: Int
+        geometryFile: String = CaptureUploadNames.geometry,
+        geometryBytes: Int,
+        geometryFrame: CaptureGeometryFrame = .capture
     ) {
         self.captureId = captureId
         self.capturedUtc = capturedUtc
         self.device = device
         self.pointSet = pointSet
+        self.fieldPoints = fieldPoints
         self.correspondences = correspondences
         self.geometryFile = geometryFile
         self.geometryBytes = geometryBytes
+        self.geometryFrame = geometryFrame
     }
+
+    /// The id the consumer matches against. The Nav set when there is one,
+    /// otherwise the phone's own set — a capture always names the points it
+    /// was taken against, whichever end placed them.
+    var pointSetId: String {
+        if let id = pointSet?.setId, !id.isEmpty { return id }
+        return fieldPoints?.setId ?? ""
+    }
+
+    /// The provenance block to carry.
+    ///
+    /// A capture aligned to a Nav set carries that set's provenance verbatim —
+    /// the consumer needs its `appliedOffset` to get back to model world
+    /// coordinates, and it must be the offset of the set the capture was taken
+    /// against rather than anything this app guessed. A capture whose points
+    /// were placed here has no such set, and says so.
+    var provenance: NavProvenance {
+        if let pointSet { return pointSet.provenance }
+        return NavProvenance(
+            sourceDocument: "",
+            sourceUnits: "Meters",
+            targetUnits: "Meters",
+            upAxis: "Y",
+            originMode: "CaptureOrigin",
+            appliedOffset: [0, 0, 0],
+            offsetNote: "These are capture-frame coordinates from the phone, not model world "
+                      + "coordinates. Place the matching ids on the model and register the two sets."
+        )
+    }
+}
+
+/// The filenames the return leg uses, in one place so the writer and the
+/// packager cannot drift.
+enum CaptureUploadNames {
+    /// FBX, not GLB.
+    ///
+    /// Appending a file is the only way a Navisworks plugin can put geometry
+    /// into an open document, and FBX is a format Navisworks reads with no
+    /// extra exporter installed. GLB is not — the scan would arrive as a file
+    /// the workstation could see and not open, which is the worst of both.
+    /// This app's FBX writer is the one the monorepo tests feed through
+    /// three.js's own FBXLoader, so it is checked against a parser that is not
+    /// ours.
+    static let geometry = "capture.fbx"
+    static let capture = "capture.json"
+    static let fieldPoints = FieldPointSet.fileName
 }
 
 /// The solve behind a capture, in the terms the consumer has to show a user.
@@ -225,7 +296,8 @@ enum CaptureExport {
     /// failed" is not.
     static func solve(
         pointSet: NavPointSet,
-        correspondences: [CaptureCorrespondence]
+        correspondences: [CaptureCorrespondence],
+        forceGravity: Bool = false
     ) throws -> CaptureSolution {
         var pairs: [ControlPair] = []
         var unknown: [String] = []
@@ -250,12 +322,51 @@ enum CaptureExport {
         }
 
         // estimateScale stays false. See the note at the top of this file.
-        let solution = try solveRigidTransform(pairs, options: SolveOptions(estimateScale: false))
+        //
+        // Two pairs are now enough: both frames know which way down is, so the
+        // vertical is held from gravity and the heading is the only rotation
+        // left to solve. `solveBestAvailable` picks that path below three pairs
+        // and Horn's above, and says which it used.
+        let solution = try solveBestAvailable(
+            pairs,
+            projectUp: GravityFrame.up(forAxis: pointSet.provenance.upAxis),
+            forceGravity: forceGravity,
+            options: SolveOptions(estimateScale: false)
+        )
         return CaptureSolution(
             solution: solution,
             grade: classifyAccuracy(solution.rmsError),
-            outliers: findOutliers(solution)
+            // Outlier detection refits without each point in turn, which needs
+            // four. Below that there is nothing to leave out.
+            outliers: pairs.count >= 4 ? findOutliers(solution) : []
         )
+    }
+
+    /// Solve a capture whose points were placed on the phone.
+    ///
+    /// There is no project frame yet — that is the point. The observations are
+    /// the field points and the "project" side is whatever the workstation
+    /// places against the same ids, so nothing can be solved here. This exists
+    /// to report what the set can support before the operator walks away from
+    /// the space, which is the only moment it can still be fixed.
+    static func registrationReadiness(_ set: FieldPointSet) -> String {
+        if set.points.isEmpty {
+            return "No points placed. Two are enough to align this scan to the model; "
+                 + "three or more make the error mean something."
+        }
+        if set.points.count == 1 {
+            return "One point fixes where the scan sits and nothing about which way it faces. "
+                 + "Place at least one more, well away from this one."
+        }
+        let baseline = String(format: "%.1f", set.baselineMetres)
+        let estimated = set.points.filter { !$0.source.isMeasured }.count
+        var line = "\(set.points.count) points, \(baseline) m apart at the widest. "
+                 + GravityFrame.redundancyGuidance(pairCount: set.points.count)
+        if estimated > 0 {
+            line += " \(estimated) of them were taken off an estimated surface rather than "
+                  + "measured depth, which is worth a decimetre on a bad day."
+        }
+        return line
     }
 
     /// Render `capture.json`.
@@ -272,7 +383,7 @@ enum CaptureExport {
         fields.append(("contractVersion", .string(contractVersion)))
         fields.append(("captureId", .string(request.captureId)))
         fields.append(("capturedUtc", .string(iso8601(request.capturedUtc))))
-        fields.append(("pointSetId", .string(request.pointSet.setId)))
+        fields.append(("pointSetId", .string(request.pointSetId)))
         fields.append(("device", .object([
             ("model", .string(request.device.model)),
             ("hasLidar", .bool(request.device.hasLidar)),
@@ -309,13 +420,26 @@ enum CaptureExport {
         fields.append(("geometry", .object([
             ("file", .string(request.geometryFile)),
             ("bytes", .int(request.geometryBytes)),
+            // Additive: a consumer written against 1.0 before this field
+            // existed reads no frame and assumes `capture`, which is what every
+            // file written before this field existed contained.
+            ("frame", .string(request.geometryFrame.rawValue)),
         ])))
+
+        if let fieldPoints = request.fieldPoints, !fieldPoints.isEmpty {
+            fields.append(("fieldPoints", .object([
+                ("file", .string(CaptureUploadNames.fieldPoints)),
+                ("setId", .string(fieldPoints.setId)),
+                ("count", .int(fieldPoints.points.count)),
+                ("baselineMetres", .number(fieldPoints.baselineMetres)),
+            ])))
+        }
 
         // Carried through verbatim from the point set. The consumer needs
         // `appliedOffset` to get back to model world coordinates, and it must
         // be the offset of the set the capture was taken against — not
         // whatever this app might have guessed.
-        fields.append(("provenance", provenanceValue(request.pointSet.provenance)))
+        fields.append(("provenance", provenanceValue(request.provenance)))
 
         return OrderedJson.render(.object(fields)) + "\n"
     }
@@ -342,6 +466,10 @@ enum CaptureExport {
         if let exported = p.exportedUtc {
             fields.append(("navex:exportedUtc", .string(exported)))
         }
+        // Which way is up in the *capture's* frame, as opposed to the model's.
+        // The consumer needs both to hold the vertical during a two-point
+        // solve, and `navex:upAxis` only ever meant the model's.
+        fields.append(("pixmyd:captureUpAxis", .string("Y")))
         return .object(fields)
     }
 

@@ -125,9 +125,7 @@ struct TransferView: View {
             if let progress {
                 ProgressView(value: progress.fraction)
                     .tint(Theme.Palette.accent)
-                Text(progress.currentFile.isEmpty
-                     ? "\(progress.completed) of \(progress.total)"
-                     : "\(progress.currentFile) — \(progress.completed) of \(progress.total)")
+                Text(progress.label)
                     .font(Theme.Typeface.caption)
                     .foregroundStyle(Theme.Palette.textSecondary)
             } else {
@@ -195,7 +193,10 @@ private struct CaptureSendPicker: View {
     @EnvironmentObject private var projects: ProjectStore
     @Environment(\.dismiss) private var dismiss
 
-    @State private var selectedSetId: String?
+    /// Empty means "the points placed on this phone" — which is now the normal
+    /// case, not a fallback. A crew walking a space for the first time has no
+    /// set from the workstation to align against, and used to be stopped here.
+    @State private var selectedSetId: String = ""
     @State private var phase: CaptureSendPickerPhase = .idle
     @State private var progress: NavTransferClient.Progress?
 
@@ -204,36 +205,23 @@ private struct CaptureSendPicker: View {
     }
 
     private var selectedSet: NavPointSet? {
-        guard let selectedSetId else { return sets.first }
-        return sets.first { $0.setId == selectedSetId }
+        sets.first { $0.setId == selectedSetId }
     }
 
     var body: some View {
         ScrollView {
             VStack(spacing: Theme.Metrics.gutter) {
-                if sets.isEmpty {
-                    Panel {
-                        Text("There is no point set on this phone to align against. "
-                           + "Download one first.")
-                            .font(Theme.Typeface.body)
-                            .foregroundStyle(Theme.Palette.textSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                setPicker
+                CaptureSendBody(
+                    pointSet: selectedSet,
+                    phase: $phase,
+                    progress: $progress
+                ) { files in
+                    guard let client else {
+                        throw TransferError.rejected("The session has closed.")
                     }
-                } else {
-                    setPicker
-                    if let set = selectedSet {
-                        CaptureSendBody(
-                            pointSet: set,
-                            phase: $phase,
-                            progress: $progress
-                        ) { files in
-                            guard let client else {
-                                throw TransferError.rejected("The session has closed.")
-                            }
-                            return try await client.upload(files: files, policy: policy) { p in
-                                progress = p
-                            }
-                        }
+                    return try await client.upload(files: files, policy: policy) { p in
+                        progress = p
                     }
                 }
             }
@@ -246,16 +234,23 @@ private struct CaptureSendPicker: View {
 
     private var setPicker: some View {
         Panel(title: "Aligned to") {
-            Picker("Point set", selection: Binding(
-                get: { selectedSet?.setId ?? "" },
-                set: { selectedSetId = $0 }
-            )) {
+            Picker("Point set", selection: $selectedSetId) {
+                Text("Points placed on this phone").tag("")
                 ForEach(sets, id: \.setId) { set in
                     Text(set.setName.isEmpty ? set.setId : set.setName).tag(set.setId)
                 }
             }
             .pickerStyle(.menu)
             .tint(Theme.Palette.accent)
+
+            Text(selectedSet == nil
+                 ? "The ids you placed travel with the scan. Place the same ids on the model "
+                 + "in PIXMYD-Nav and it registers the two sets there."
+                 : "The scan is registered here against a set from PIXMYD-Nav, and arrives "
+                 + "already in model coordinates.")
+                .font(Theme.Typeface.caption)
+                .foregroundStyle(Theme.Palette.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
@@ -263,7 +258,10 @@ private struct CaptureSendPicker: View {
 /// The part shared by "send over this session" and "export to Files": pick a
 /// processed scan, show the fit, package it.
 struct CaptureSendBody: View {
-    let pointSet: NavPointSet
+    /// The set from PIXMYD-Nav this scan was aligned to, when there is one.
+    /// Nil means the scan carries points placed on this phone instead, and the
+    /// registration happens at the workstation.
+    let pointSet: NavPointSet?
     @Binding var phase: CaptureSendPickerPhase
     @Binding var progress: NavTransferClient.Progress?
     /// What to do with the packaged bytes. Returning a commit result means the
@@ -283,6 +281,17 @@ struct CaptureSendBody: View {
         return processed.first { $0.id == selectedProjectId }
     }
 
+    /// The points placed on the phone during the selected capture, if any.
+    ///
+    /// Read off disk rather than held in a store: they live in the project
+    /// directory beside the frames they were placed during, and the directory
+    /// is the source of truth for everything else this app records.
+    private var fieldPoints: FieldPointSet? {
+        guard let selectedProject else { return nil }
+        guard let set = FieldPointSet.load(in: selectedProject.url), !set.isEmpty else { return nil }
+        return set
+    }
+
     var body: some View {
         VStack(spacing: Theme.Metrics.gutter) {
             fit
@@ -291,7 +300,58 @@ struct CaptureSendBody: View {
         }
     }
 
+    @ViewBuilder
     private var fit: some View {
+        if let pointSet {
+            navSetFit(pointSet)
+        } else {
+            fieldPointFit
+        }
+    }
+
+    /// What travels when the points came from this phone.
+    ///
+    /// There is no fit to show, and saying so is the honest thing: the model
+    /// frame does not exist here, which is the entire reason the ids are being
+    /// sent. What can be said is whether the set is capable of registering
+    /// anything once it gets there, and that is worth saying while the operator
+    /// is still standing in the space.
+    private var fieldPointFit: some View {
+        Panel(title: "Points on this scan") {
+            if let fieldPoints {
+                HStack(spacing: Theme.Metrics.gutter) {
+                    Readout(label: "Placed", value: "\(fieldPoints.points.count)")
+                    Readout(
+                        label: "Spread",
+                        value: String(format: "%.1f", fieldPoints.baselineMetres),
+                        unit: "m"
+                    )
+                    Readout(
+                        label: "Measured",
+                        value: "\(fieldPoints.points.filter { $0.source.isMeasured }.count)"
+                    )
+                }
+                Text(CaptureExport.registrationReadiness(fieldPoints))
+                    .font(Theme.Typeface.caption)
+                    .foregroundStyle(fieldPoints.canRegister ? Theme.Palette.textSecondary : Theme.Palette.caution)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("Place P001 upward on the model in PIXMYD-Nav and it will register the two "
+                   + "sets and put the scan where it belongs.")
+                    .font(Theme.Typeface.caption)
+                    .foregroundStyle(Theme.Palette.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("No points were placed during this scan, and no set from PIXMYD-Nav is "
+                   + "selected. The scan will arrive with nothing to align it, and somebody "
+                   + "will have to place it by eye.")
+                    .font(Theme.Typeface.caption)
+                    .foregroundStyle(Theme.Palette.caution)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func navSetFit(_ pointSet: NavPointSet) -> some View {
         Panel(title: "Fit") {
             switch site.solve(for: pointSet) {
             case let .success(solved)?:
@@ -406,11 +466,21 @@ struct CaptureSendBody: View {
         guard let project = selectedProject else { return }
         phase = .working
         do {
-            let solved = try? site.solve(for: pointSet)?.get()
+            let placed = fieldPoints
+            let solved = pointSet.flatMap { try? site.solve(for: $0)?.get() }
+            // Whichever end placed the points, the observations travel: from a
+            // Nav set they are the markers the operator located, and from this
+            // phone they are the points themselves. The consumer can re-solve
+            // either way rather than trust a number it cannot check.
+            let correspondences = pointSet.map { site.correspondences(for: $0) }
+                ?? placed?.correspondences
+                ?? []
+
             let files = try CaptureUpload.package(
                 project: project,
                 pointSet: pointSet,
-                correspondences: site.correspondences(for: pointSet),
+                fieldPoints: placed,
+                correspondences: correspondences,
                 solved: solved
             )
             let result = try await send(files)
@@ -440,7 +510,7 @@ enum CaptureSendPickerPhase: Equatable {
 /// works when the workstation is on a different VLAN, which on a real site is
 /// most of the time.
 struct CaptureSendView: View {
-    let pointSet: NavPointSet
+    let pointSet: NavPointSet?
 
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var site: SiteStore
@@ -455,8 +525,9 @@ struct CaptureSendView: View {
             ScrollView {
                 VStack(spacing: Theme.Metrics.gutter) {
                     Panel(title: "Where it goes") {
-                        Text("This writes capture.json and capture.glb, then hands them to the "
-                           + "share sheet. Save them somewhere PIXMYD-Nav can open, or scan a "
+                        Text("This writes capture.json, capture.fbx and — when you placed "
+                           + "points on this scan — points.json, then hands them to the share "
+                           + "sheet. Save them somewhere PIXMYD-Nav can open, or scan a "
                            + "transfer code to send them straight to the workstation.")
                             .font(Theme.Typeface.body)
                             .foregroundStyle(Theme.Palette.textSecondary)
