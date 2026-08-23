@@ -48,7 +48,7 @@ is parsed back by three.js's loaders in the test suite.
 ## What works today
 
 Everything listed here is implemented and covered by the test suite
-(`npm test`, 298 tests, no network access required — plus 240 Swift tests for
+(`npm test`, 298 tests, no network access required — plus 247 Swift tests for
 the iOS app's arithmetic, `swift test` in `apps/ios`).
 
 ### Export formats — `packages/formats`
@@ -147,7 +147,7 @@ tabs — Capture, Projects, Site, Survey, Account.
 
 **Partly compiled.** The arithmetic — bundle schema, TSDF fusion, meshing,
 format writers, NMEA parsing — builds and tests on Linux via
-[`apps/ios/Package.swift`](apps/ios/Package.swift), 240 tests, run in CI. The
+[`apps/ios/Package.swift`](apps/ios/Package.swift), 247 tests, run in CI. The
 SwiftUI, ARKit, CoreLocation and Metal half has only been parsed;
 [Codemagic](codemagic.yaml) compiles it and produces an unsigned `.ipa` a free
 Apple ID can sideload. See [`apps/ios/README.md`](apps/ios/README.md) for the
@@ -191,6 +191,15 @@ workstation screen, scanned on the phone, opens a session that offers a folder
 and accepts a scan. Progress is reported in bytes rather than files completed,
 because the return leg is a JSON of a few kilobytes and a mesh three orders of
 magnitude larger.
+
+**And the model comes the other way.** The add-in tessellates the document into
+`ar-model.glb`; `GlbReader` reads back the subset both writers in this suite
+produce and refuses the rest rather than drawing a model that is subtly in the
+wrong place. The overlay is anchored on the located points and never on the
+phone's own guess — there is no "just show it in front of me" mode, because an
+overlay floating at arm's length looks exactly like an aligned one through a
+phone screen and somebody would measure from it. The RMS that placed it stays
+on screen the whole time.
 
 ### Studio web app — `apps/studio`
 
