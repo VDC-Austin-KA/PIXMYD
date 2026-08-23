@@ -427,8 +427,8 @@ extension ARSessionController: ARSessionDelegate {
         // No depth: either not a LiDAR device, or the surface swallowed the
         // pulse. A plane estimate is worth offering and is labelled as one.
         let centre = CGPoint(x: 0.5, y: 0.5)
-        if let query = frame.raycastQuery(from: centre, allowing: .estimatedPlane, alignment: .any),
-           let hit = session.raycast(query).first {
+        let query = frame.raycastQuery(from: centre, allowing: .estimatedPlane, alignment: .any)
+        if let hit = session.raycast(query).first {
             let world = hit.worldTransform.translation
             pointTarget = world
             pointTargetSource = .plane

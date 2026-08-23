@@ -1,5 +1,5 @@
 import ARKit
-import SceneKit
+@preconcurrency import SceneKit
 import SwiftUI
 import UIKit
 
