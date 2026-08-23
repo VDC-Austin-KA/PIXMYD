@@ -175,10 +175,17 @@ struct TransferView: View {
         progress = nil
     }
 
+    /// Statements rather than one ternary mixing interpolation, `max` and
+    /// integer division — the shape that timed out the type checker in
+    /// `ReceiverScanView`, which the Linux CI cannot see because it only parses
+    /// this half of the app.
     private func byteLabel(_ bytes: Int) -> String {
-        bytes < 1_048_576
-            ? "\(max(1, bytes / 1024)) KB"
-            : String(format: "%.1f MB", Double(bytes) / 1_048_576)
+        if bytes < 1_048_576 {
+            let kilobytes: Int = Swift.max(1, bytes / 1024)
+            return String(kilobytes) + " KB"
+        }
+        let megabytes: Double = Double(bytes) / 1_048_576
+        return String(format: "%.1f MB", megabytes)
     }
 }
 

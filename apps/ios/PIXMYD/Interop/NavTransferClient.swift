@@ -69,10 +69,27 @@ final class NavTransferClient {
         }
 
         /// One line for under the bar.
+        ///
+        /// Written out as statements, with every intermediate typed. The
+        /// compact version of this — a ternary whose branches interpolate a
+        /// call to `min` over an arithmetic expression, then a second ternary
+        /// mixing `+` with interpolation — is the exact shape that timed out
+        /// the type checker in `ReceiverScanView` and broke a macOS build. The
+        /// Linux CI only *parses* this half of the app, so nothing here catches
+        /// that class of failure before a Mac does.
         var label: String {
-            let counts = filesTotal > 1 ? " · file \(min(filesDone + 1, filesTotal)) of \(filesTotal)" : ""
-            let sizes = "\(Self.bytes(bytesDone)) of \(Self.bytes(bytesTotal))"
-            return currentFile.isEmpty ? sizes + counts : "\(currentFile) — \(sizes)\(counts)"
+            let done: String = Self.bytes(bytesDone)
+            let total: String = Self.bytes(bytesTotal)
+            let sizes: String = done + " of " + total
+
+            var counts: String = ""
+            if filesTotal > 1 {
+                let index: Int = Swift.min(filesDone + 1, filesTotal)
+                counts = " · file " + String(index) + " of " + String(filesTotal)
+            }
+
+            if currentFile.isEmpty { return sizes + counts }
+            return currentFile + " — " + sizes + counts
         }
 
         static func bytes(_ value: Int) -> String {
