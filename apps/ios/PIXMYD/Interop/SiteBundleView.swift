@@ -18,6 +18,7 @@ struct SiteBundleView: View {
 
     @State private var uploading = false
     @State private var confirmingDelete = false
+    @State private var showingOverlay = false
 
     var body: some View {
         ScrollView {
@@ -43,6 +44,9 @@ struct SiteBundleView: View {
             if let set = bundle.pointSet {
                 CaptureSendView(pointSet: set)
             }
+        }
+        .fullScreenCover(isPresented: $showingOverlay) {
+            ArModelView(bundle: bundle)
         }
         .confirmationDialog(
             "Remove \(bundle.displayName)?",
@@ -185,9 +189,29 @@ struct SiteBundleView: View {
                     .font(Theme.Typeface.caption)
                     .foregroundStyle(Theme.Palette.textSecondary)
             }
-            if !ar.hasGeometry {
+            if ar.hasGeometry {
+                // Anchored on the located points, so the readiness line says
+                // what is missing rather than the button doing nothing.
+                let readiness = ArModelPlacement.readiness(
+                    hasGeometry: true,
+                    pointSet: bundle.pointSet,
+                    located: bundle.pointSet.map { site.observedCount(setId: $0.setId) } ?? 0,
+                    solved: bundle.pointSet.flatMap { site.solve(for: $0) })
+
+                Text(readiness.summary)
+                    .font(Theme.Typeface.caption)
+                    .foregroundStyle(readiness.canDraw ? Theme.Palette.textSecondary : Theme.Palette.caution)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                FieldButton(title: "Show over the room", systemImage: "cube.transparent", role: .primary) {
+                    showingOverlay = true
+                }
+                .disabled(!readiness.canDraw)
+                .opacity(readiness.canDraw ? 1 : 0.5)
+            } else {
                 Text("No geometry was exported with this bundle, so the model cannot be drawn over "
-                   + "the room. The box and the reference photo still show where it is.")
+                   + "the room. Export it again from PIXMYD-Nav with \"Include model geometry\" "
+                   + "ticked. The box and the reference photo still show where it is.")
                     .font(Theme.Typeface.caption)
                     .foregroundStyle(Theme.Palette.caution)
                     .fixedSize(horizontal: false, vertical: true)
