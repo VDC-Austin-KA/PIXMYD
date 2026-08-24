@@ -333,15 +333,19 @@ private struct MarkerAlignContainer: UIViewRepresentable {
             // column face is a plane and the estimate is usually close.
             var target: SIMD3<Float>?
             for alignment in [ARRaycastQuery.TargetAlignment.any] {
-                if let query = view.raycastQuery(from: centre, allowing: .existingPlaneGeometry, alignment: alignment),
-                   let hit = view.session.raycast(query).first {
+                // `raycastQuery` is non-optional as of Xcode 26; binding it
+                // with `if let` is a compile error rather than a warning.
+                let onGeometry = view.raycastQuery(
+                    from: centre, allowing: .existingPlaneGeometry, alignment: alignment)
+                if let hit = view.session.raycast(onGeometry).first {
                     target = SIMD3<Float>(hit.worldTransform.columns.3.x,
                                           hit.worldTransform.columns.3.y,
                                           hit.worldTransform.columns.3.z)
                     break
                 }
-                if let query = view.raycastQuery(from: centre, allowing: .estimatedPlane, alignment: alignment),
-                   let hit = view.session.raycast(query).first {
+                let onEstimate = view.raycastQuery(
+                    from: centre, allowing: .estimatedPlane, alignment: alignment)
+                if let hit = view.session.raycast(onEstimate).first {
                     target = SIMD3<Float>(hit.worldTransform.columns.3.x,
                                           hit.worldTransform.columns.3.y,
                                           hit.worldTransform.columns.3.z)
