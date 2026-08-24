@@ -106,7 +106,7 @@ they are tested.
 
 ## Screens
 
-Four tabs, following the shape a field user already expects.
+Five tabs, following the shape a field user already expects.
 
 **Capture.** Viewfinder with the position quality top-left, tools top-right, and
 the shutter bottom-centre. While recording it shows frames captured, distance
@@ -118,6 +118,19 @@ registration residual, and export.
 
 **Survey.** Point collections imported from PNEZD files, for georeferencing and
 for grading the result.
+
+**Site.** The PIXMYD-Nav half. Point sets and model bundles arrive by scanning a
+transfer code or importing a folder, and points can also be placed here with
+nothing imported at all - aim at a feature, tap, and the phone authors its own
+`points.json`. A scan sent back carries `capture.json`, `capture.fbx` and that
+`points.json`; in Navisworks, Seed phone points puts the ids in the list, the
+user clicks each one on the model, and the fit is computed there, where both
+frames exist at once.
+
+A model bundle with geometry can be placed in the room from the same screen.
+Anchor it on the set's own ids - one anchor pins it, two turn it, three make the
+turn trustworthy - and drag, twist or step it into place by hand on top. The
+residuals shown are always the fit's, never the nudge's.
 
 **Account.** Capture settings, scan mode, RTK profiles with NTRIP credentials
 and antenna offsets, AR display options, and a plain statement of what this
@@ -214,6 +227,7 @@ PIXMYD/
   Account/    settings, RTK profiles
   RTK/        GNSS manager, NMEA parsing, NTRIP client, receiver scan and links
   Export/     TSDF fusion, marching tetrahedra, format writers
+  Interop/    PIXMYD-Nav point sets, AR model placement, capture return leg
   Model/      the capture bundle schema
   Design/     theme and shared components
 ```

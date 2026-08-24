@@ -12,7 +12,11 @@ struct ExportSheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var store: ProjectStore
     @StateObject private var processor = ProcessingPipeline()
-    @State private var format: ExportFormat = .glb
+    // FBX by default. Everything captured here is headed for Navisworks, and
+    // FBX is the only mesh format it appends without an extra exporter — a GLB
+    // default meant every scan needed converting before it could be placed.
+    // GLB is still one tap away for the viewer and web cases.
+    @State private var format: ExportFormat = .fbx
     @State private var quality: ProcessingPipeline.Quality = .balanced
     // Standard by default. The raw output of fusion is not a sensible
     // deliverable — it is hundreds of megabytes of mostly-flat triangles and

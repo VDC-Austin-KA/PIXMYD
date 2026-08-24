@@ -612,7 +612,7 @@ final class NavInteropTests: XCTestCase {
         XCTAssertEqual(provenance["navex:targetUnits"] as? String, "Meters")
 
         let geometry = try XCTUnwrap(root["geometry"] as? [String: Any])
-        XCTAssertEqual(geometry["file"] as? String, "capture.glb")
+        XCTAssertEqual(geometry["file"] as? String, "capture.fbx")
         XCTAssertEqual(geometry["bytes"] as? Int, 12_882_110)
 
         XCTAssertEqual(root["capturedUtc"] as? String, "2026-02-02T02:40:00.000Z")

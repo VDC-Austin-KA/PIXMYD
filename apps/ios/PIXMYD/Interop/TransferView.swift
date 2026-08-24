@@ -325,10 +325,17 @@ struct CaptureSendBody: View {
                     .fixedSize(horizontal: false, vertical: true)
 
             case nil:
-                Text("No points located against this set. The scan will be sent with its raw "
-                   + "observations only, and placed by hand in Navisworks.")
+                Text(pointSet.isCaptureFrame
+                     ? "These points were placed on this phone, so there is nothing to solve "
+                     + "against yet. The scan travels with its ids and their positions; press "
+                     + "Seed phone points in PIXMYD-Nav, click each id on the model, and the fit "
+                     + "is computed there."
+                     : "No points located against this set. The scan will be sent with its raw "
+                     + "observations only, and placed by hand in Navisworks.")
                     .font(Theme.Typeface.caption)
-                    .foregroundStyle(Theme.Palette.caution)
+                    .foregroundStyle(pointSet.isCaptureFrame
+                                     ? Theme.Palette.textSecondary
+                                     : Theme.Palette.caution)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -455,9 +462,9 @@ struct CaptureSendView: View {
             ScrollView {
                 VStack(spacing: Theme.Metrics.gutter) {
                     Panel(title: "Where it goes") {
-                        Text("This writes capture.json and capture.glb, then hands them to the "
-                           + "share sheet. Save them somewhere PIXMYD-Nav can open, or scan a "
-                           + "transfer code to send them straight to the workstation.")
+                        Text("This writes capture.json, capture.fbx and points.json, then hands "
+                           + "them to the share sheet. Save them somewhere PIXMYD-Nav can open, "
+                           + "or scan a transfer code to send them straight to the workstation.")
                             .font(Theme.Typeface.body)
                             .foregroundStyle(Theme.Palette.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)

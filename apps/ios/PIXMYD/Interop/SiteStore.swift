@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import SwiftUI
 
 // The observable wrapper around `NavBundleStore`, plus the observations the
@@ -151,6 +152,12 @@ final class SiteStore: ObservableObject {
     /// solve. Errors are returned rather than thrown so the caller can show
     /// the solver's own wording next to a disabled button.
     func solve(for set: NavPointSet) -> Result<CaptureSolution, Error>? {
+        // A set the phone authored has its observed positions *as* its
+        // coordinates, so a solve against it is the identity with zero error —
+        // a perfect-looking fit that means nothing. There is nothing to solve
+        // until the same ids are picked on the model, which happens in
+        // Navisworks, so say nothing here rather than something reassuring.
+        guard !set.isCaptureFrame else { return nil }
         let pairs = correspondences(for: set)
         guard !pairs.isEmpty else { return nil }
         do {
@@ -158,6 +165,66 @@ final class SiteStore: ObservableObject {
         } catch {
             return .failure(error)
         }
+    }
+
+    // MARK: - Points placed on this phone
+
+    /// The set this phone authored, if there is one.
+    ///
+    /// One per device rather than one per job: a second local set would need a
+    /// name, and naming a thing before it has any points in it is the step
+    /// everyone skips. Marks accumulate into the same set and the workstation
+    /// sorts out which job they belong to, which it has to do anyway.
+    var localBundle: StoredNavBundle? {
+        bundles.first { $0.pointSet?.isCaptureFrame == true }
+    }
+
+    /// Add a mark at `observed` — metres, in the AR session's world frame —
+    /// to the phone's own set, creating that set the first time.
+    ///
+    /// The position is written twice on purpose: once as the point's
+    /// coordinate, because in the capture frame that is what it is, and once as
+    /// an observation, because that is the column `correspondences(for:)`
+    /// reads. Placing a mark and locating it are the same act here.
+    @discardableResult
+    func placeLocalPoint(at observed: SIMD3<Double>, label: String = "") throws -> StoredNavBundle {
+        let existing = localBundle?.pointSet
+        let base = existing ?? NavPointSet.local(
+            name: "Placed on site",
+            device: UIDevice.current.model,
+            createdUtc: Self.timestamp()
+        )
+        let updated = base.addingLocalPoint(at: observed, label: label)
+        let bundle = try installLocal(updated)
+        if let placed = updated.points.last {
+            record(setId: updated.setId, pointId: placed.id, observed: observed)
+        }
+        return bundle
+    }
+
+    /// Remove one mark from the phone's own set, and the observation with it.
+    func removeLocalPoint(id: String) throws {
+        guard let set = localBundle?.pointSet else { return }
+        _ = try installLocal(set.removingPoint(id: id))
+        clearObservation(setId: set.setId, pointId: id)
+    }
+
+    /// Write a locally authored set back to disk as a bundle.
+    ///
+    /// Through `NavBundleStore.install` rather than a private path: the store
+    /// keys a bundle on its set id and replaces the folder, so re-writing the
+    /// set after every mark updates one bundle instead of accumulating a
+    /// folder per point. Everything downstream — the list, the observations,
+    /// sending a scan back — then works on it without knowing it was authored
+    /// here rather than imported.
+    private func installLocal(_ set: NavPointSet) throws -> StoredNavBundle {
+        try install(files: [CaptureUpload.pointsFileName: try set.renderJson()])
+    }
+
+    nonisolated private static func timestamp() -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.string(from: Date())
     }
 
     // MARK: - Persistence
