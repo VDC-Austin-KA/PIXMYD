@@ -63,7 +63,9 @@ struct SiteBundleView: View {
         }
         .fullScreenCover(isPresented: $placing) {
             PlacePointView(nextId: current.pointSet?.nextLocalPointId ?? "P001") { observed in
-                try? site.placeLocalPoint(at: observed)
+                // The bundle it returns is re-read from the store on the next
+                // render, so the value here is genuinely unused.
+                _ = try? site.placeLocalPoint(at: observed)
             }
         }
         .sheet(isPresented: $uploading) {
@@ -247,10 +249,7 @@ struct SiteBundleView: View {
             }
             if set.points.isEmpty {
                 Panel {
-                    Text(set.isCaptureFrame
-                         ? "No marks placed yet. Aim at something you will recognise in the "
-                         + "model, and tap."
-                         : "This set has no points in it yet.")
+                    Text(emptyPointsText(set))
                         .font(Theme.Typeface.body)
                         .foregroundStyle(Theme.Palette.textSecondary)
                 }
@@ -273,12 +272,7 @@ struct SiteBundleView: View {
                 FieldButton(title: "Place it in the room", systemImage: "arkit", role: .primary) {
                     showingModel = true
                 }
-                Text(current.pointSet == nil
-                     ? "There is no point set beside this model, so it can only be dropped by "
-                     + "hand and nudged into place. That is enough to see where things are; it "
-                     + "is not enough to measure against."
-                     : "Anchor it on the points from this set: pick one, aim at the real thing, "
-                     + "tap. One anchor pins it, two turn it, three make the turn trustworthy.")
+                Text(anchoringText)
                     .font(Theme.Typeface.caption)
                     .foregroundStyle(Theme.Palette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -297,6 +291,30 @@ struct SiteBundleView: View {
                     .clipShape(RoundedRectangle(cornerRadius: Theme.Metrics.cornerRadiusSmall))
             }
         }
+    }
+
+    // Both of these are statements rather than ternaries inlined into a
+    // `Text(...)`. A ternary choosing between two `+`-concatenated literals is
+    // the exact shape that has now failed to type-check three times in this
+    // app — see `hiddenSummary` in ReceiverScanView and the transfer bar's
+    // strings. Cheap to hoist, and it stops being a build risk.
+
+    private func emptyPointsText(_ set: NavPointSet) -> String {
+        if set.isCaptureFrame {
+            return "No marks placed yet. Aim at something you will recognise in the model, "
+                 + "and tap."
+        }
+        return "This set has no points in it yet."
+    }
+
+    private var anchoringText: String {
+        if current.pointSet == nil {
+            return "There is no point set beside this model, so it can only be dropped by hand "
+                 + "and nudged into place. That is enough to see where things are; it is not "
+                 + "enough to measure against."
+        }
+        return "Anchor it on the points from this set: pick one, aim at the real thing, tap. "
+             + "One anchor pins it, two turn it, three make the turn trustworthy."
     }
 
     private func tone(for band: AccuracyBand) -> Readout.Tone {

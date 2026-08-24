@@ -325,20 +325,32 @@ struct CaptureSendBody: View {
                     .fixedSize(horizontal: false, vertical: true)
 
             case nil:
-                Text(pointSet.isCaptureFrame
-                     ? "These points were placed on this phone, so there is nothing to solve "
-                     + "against yet. The scan travels with its ids and their positions; press "
-                     + "Seed phone points in PIXMYD-Nav, click each id on the model, and the fit "
-                     + "is computed there."
-                     : "No points located against this set. The scan will be sent with its raw "
-                     + "observations only, and placed by hand in Navisworks.")
+                Text(unsolvedText)
                     .font(Theme.Typeface.caption)
-                    .foregroundStyle(pointSet.isCaptureFrame
-                                     ? Theme.Palette.textSecondary
-                                     : Theme.Palette.caution)
+                    .foregroundStyle(unsolvedTone)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    // Statements, not a ternary inlined into `Text(...)`: that shape has failed
+    // to type-check three times in this app already.
+
+    private var unsolvedText: String {
+        if pointSet.isCaptureFrame {
+            return "These points were placed on this phone, so there is nothing to solve "
+                 + "against yet. The scan travels with its ids and their positions; press "
+                 + "Seed phone points in PIXMYD-Nav, click each id on the model, and the fit "
+                 + "is computed there."
+        }
+        return "No points located against this set. The scan will be sent with its raw "
+             + "observations only, and placed by hand in Navisworks."
+    }
+
+    /// Not a warning for a phone-authored set: nothing is wrong, the solve
+    /// simply happens at the other end.
+    private var unsolvedTone: Color {
+        pointSet.isCaptureFrame ? Theme.Palette.textSecondary : Theme.Palette.caution
     }
 
     private var scanPicker: some View {
