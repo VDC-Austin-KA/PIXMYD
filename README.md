@@ -195,11 +195,22 @@ magnitude larger.
 **And the model comes the other way.** The add-in tessellates the document into
 `ar-model.glb`; `GlbReader` reads back the subset both writers in this suite
 produce and refuses the rest rather than drawing a model that is subtly in the
-wrong place. The overlay is anchored on the located points and never on the
-phone's own guess — there is no "just show it in front of me" mode, because an
-overlay floating at arm's length looks exactly like an aligned one through a
-phone screen and somebody would measure from it. The RMS that placed it stays
-on screen the whole time.
+wrong place.
+
+There are two ways to anchor it and the screen never lets them be confused.
+The **survey fit** solves from three or more located markers, is measurable,
+and keeps the RMS that placed it on screen the whole time. **By hand** anchors
+on whatever points the bundle carries, from one, and lets the operator correct
+it by eye afterwards — drag to slide, twist to turn, arrows for height, and any
+anchor can be replaced or cleared with the placement re-solving as it happens.
+
+The hand path exists because an overlay floating at arm's length looks exactly
+like an aligned one through a phone screen, and refusing to draw one was the
+wrong answer to that: most of the time nobody has walked the site with a marker
+pack, and the real question is whether those ducts clash with that beam. So the
+overlay is drawn, and it is labelled NOT MEASURABLE in the same place the survey
+fit shows its RMS. There is no reassuring number to be had from it, because it
+does not have one.
 
 ### Studio web app — `apps/studio`
 

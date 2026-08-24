@@ -32,6 +32,7 @@ let portableSources = [
     "Interop/CaptureExport.swift",
     "Interop/FieldPointSet.swift",
     "Interop/ArModelPlacement.swift",
+    "Interop/ArHandPlacement.swift",
     "Interop/NavTransfer.swift",
     "Export/Exporters.swift",
     "Export/PngWriter.swift",

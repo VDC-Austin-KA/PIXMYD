@@ -319,7 +319,7 @@ struct ProjectDetailView: View {
                 FieldButton(title: "Reprocess", systemImage: "arrow.clockwise", role: .secondary) {
                     processor.run(
                         project: project,
-                        format: .glb,
+                        format: .fbx,
                         quality: matchingQuality(for: project),
                         cleanup: .standard,
                         reviewFirst: true,
@@ -339,7 +339,7 @@ struct ProjectDetailView: View {
     private func viewProject(_ project: CaptureProject) {
         processor.run(
             project: project,
-            format: .glb,
+            format: .fbx,
             quality: matchingQuality(for: project),
             cleanup: .standard,
             reviewFirst: true
