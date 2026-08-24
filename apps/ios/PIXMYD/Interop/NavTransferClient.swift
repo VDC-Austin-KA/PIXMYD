@@ -92,7 +92,12 @@ final class NavTransferClient {
             return currentFile + " — " + sizes + counts
         }
 
-        static func bytes(_ value: Int) -> String {
+        /// `nonisolated` because it is a pure function of its argument, and
+        /// `verify.sh` fails the build over exactly this: a static member of a
+        /// `@MainActor` type inherits that isolation, so calling it from a
+        /// detached task is either an error or a silent hop back to the main
+        /// thread.
+        nonisolated static func bytes(_ value: Int) -> String {
             if value < 1024 { return "\(value) B" }
             if value < 1_048_576 { return String(format: "%.0f KB", Double(value) / 1024) }
             if value < 1_073_741_824 { return String(format: "%.1f MB", Double(value) / 1_048_576) }
@@ -200,7 +205,7 @@ final class NavTransferClient {
     func upload(
         files: [String: Data],
         policy: TransferUploadPolicy,
-        onProgress: @MainActor (Progress) -> Void = { _ in }
+        onProgress: @escaping @MainActor (Progress) -> Void = { _ in }
     ) async throws -> TransferCommitResult {
         guard policy.accepted else {
             throw TransferError.rejected("This session is not accepting uploads.")
