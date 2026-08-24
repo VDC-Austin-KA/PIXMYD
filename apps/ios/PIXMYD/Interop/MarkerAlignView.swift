@@ -229,17 +229,24 @@ private struct MarkerAlignContainer: UIViewRepresentable {
             // depth measurement of the surface the mark is printed on. An
             // estimated plane is the fallback and is worth having, because a
             // column face is a plane and the estimate is usually close.
+            // `ARSCNView.raycastQuery` returns an Optional -- unlike
+            // `ARFrame.raycastQuery`, which does not. The two read identically
+            // at the call site and differ in exactly that, which is how one
+            // sweep to "fix Xcode 26's non-optional raycastQuery" unwrapped
+            // both and broke this one.
             var target: SIMD3<Float>?
             for alignment in [ARRaycastQuery.TargetAlignment.any] {
-                let query = view.raycastQuery(from: centre, allowing: .existingPlaneGeometry, alignment: alignment)
-                if let hit = view.session.raycast(query).first {
+                if let onGeometry = view.raycastQuery(
+                    from: centre, allowing: .existingPlaneGeometry, alignment: alignment),
+                   let hit = view.session.raycast(onGeometry).first {
                     target = SIMD3<Float>(hit.worldTransform.columns.3.x,
                                           hit.worldTransform.columns.3.y,
                                           hit.worldTransform.columns.3.z)
                     break
                 }
-                let query = view.raycastQuery(from: centre, allowing: .estimatedPlane, alignment: alignment)
-                if let hit = view.session.raycast(query).first {
+                if let onEstimate = view.raycastQuery(
+                    from: centre, allowing: .estimatedPlane, alignment: alignment),
+                   let hit = view.session.raycast(onEstimate).first {
                     target = SIMD3<Float>(hit.worldTransform.columns.3.x,
                                           hit.worldTransform.columns.3.y,
                                           hit.worldTransform.columns.3.z)

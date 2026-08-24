@@ -681,9 +681,11 @@ private struct ArModelContainer: UIViewRepresentable {
         private func sample() {
             guard aiming, let view, view.session.currentFrame != nil else { return }
             let centre = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
-            // `raycastQuery` is non-optional as of Xcode 26.
-            let query = view.raycastQuery(from: centre, allowing: .estimatedPlane, alignment: .any)
-            let hit = view.session.raycast(query).first
+            // `ARSCNView.raycastQuery` returns an Optional. `ARFrame`'s
+            // same-named method does not, and the two read identically at the
+            // call site -- see the note in MarkerAlignView.
+            let hit = view.raycastQuery(from: centre, allowing: .estimatedPlane, alignment: .any)
+                .flatMap { view.session.raycast($0).first }
             let target = hit.map {
                 SIMD3<Float>($0.worldTransform.columns.3.x,
                              $0.worldTransform.columns.3.y,
