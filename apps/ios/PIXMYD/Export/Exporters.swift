@@ -615,9 +615,9 @@ enum ExportFormat: String, CaseIterable, Identifiable {
 
     var detail: String {
         switch self {
-        case .glb: "One file, opens nearly everywhere. Best default for a mesh."
+        case .glb: "One file, opens nearly everywhere. Best for viewers and the web."
         case .obj: "Ancient and universal. Opens with no plugin on any machine."
-        case .fbx: "Autodesk's own. One binary file — geometry, colour, and the baked texture inside."
+        case .fbx: "Autodesk's own, and what Navisworks appends directly. One binary file — geometry, colour and the baked texture inside. Best default for a mesh."
         case .ply: "Point cloud or mesh. The interchange format for scan data."
         case .e57: "Survey interchange. Carries the georeference and per-scan poses."
         case .las: "What GIS and Civil 3D expect. Millimetre precision at State Plane magnitudes."

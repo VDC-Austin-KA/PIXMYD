@@ -18,16 +18,33 @@ struct SiteBundleView: View {
 
     @State private var uploading = false
     @State private var confirmingDelete = false
+    @State private var placing = false
+    @State private var showingModel = false
+
+    /// The bundle as the store currently holds it.
+    ///
+    /// Not the one the navigation link handed over: placing a mark rewrites
+    /// the set on disk and reloads the list, and a screen rendering from the
+    /// captured value would go on showing the point count it was opened with.
+    /// Falling back to that value keeps the screen readable for the moment
+    /// between a delete and the dismiss that follows it.
+    private var current: StoredNavBundle {
+        site.bundles.first { $0.id == bundle.id } ?? bundle
+    }
 
     var body: some View {
         ScrollView {
             VStack(spacing: Theme.Metrics.gutter) {
                 provenance
-                if let set = bundle.pointSet {
-                    alignment(set)
+                if let set = current.pointSet {
+                    if set.isCaptureFrame {
+                        placedHere(set)
+                    } else {
+                        alignment(set)
+                    }
                     points(set)
                 }
-                if let ar = bundle.arBundle {
+                if let ar = current.arBundle {
                     model(ar)
                 }
                 FieldButton(title: "Remove from this device", systemImage: "trash", role: .destructive) {
@@ -37,20 +54,30 @@ struct SiteBundleView: View {
             .padding(Theme.Metrics.gutter)
         }
         .background(Theme.Palette.background)
-        .navigationTitle(bundle.displayName)
+        .navigationTitle(current.displayName)
         .navigationBarTitleDisplayMode(.inline)
+        .fullScreenCover(isPresented: $showingModel) {
+            if let ar = current.arBundle {
+                ArModelView(bundle: current, ar: ar)
+            }
+        }
+        .fullScreenCover(isPresented: $placing) {
+            PlacePointView(nextId: current.pointSet?.nextLocalPointId ?? "P001") { observed in
+                try? site.placeLocalPoint(at: observed)
+            }
+        }
         .sheet(isPresented: $uploading) {
-            if let set = bundle.pointSet {
+            if let set = current.pointSet {
                 CaptureSendView(pointSet: set)
             }
         }
         .confirmationDialog(
-            "Remove \(bundle.displayName)?",
+            "Remove \(current.displayName)?",
             isPresented: $confirmingDelete,
             titleVisibility: .visible
         ) {
             Button("Remove", role: .destructive) {
-                site.delete(bundle)
+                site.delete(current)
                 dismiss()
             }
             Button("Keep", role: .cancel) {}
@@ -63,7 +90,7 @@ struct SiteBundleView: View {
     // MARK: - Sections
 
     private var provenance: some View {
-        let p = bundle.pointSet?.provenance ?? bundle.arBundle?.provenance
+        let p = current.pointSet?.provenance ?? current.arBundle?.provenance
         return Panel(title: "Source") {
             if let p {
                 Text(p.sourceDocument.isEmpty ? "Unnamed model" : p.sourceDocument)
@@ -88,6 +115,48 @@ struct SiteBundleView: View {
                     .font(Theme.Typeface.caption)
                     .foregroundStyle(Theme.Palette.textTertiary)
             }
+        }
+    }
+
+    /// The panel for a set this phone authored.
+    ///
+    /// No fit, no RMS, no grade — deliberately. These points *are* their own
+    /// observations, so a solve against them is the identity with zero error,
+    /// and printing "0 mm, excellent" beside a set nobody has registered yet
+    /// would be the most reassuring lie the app could tell. The alignment
+    /// becomes real once the same ids are picked on the model, which happens in
+    /// Navisworks; what belongs here is how many marks there are and whether
+    /// there are enough of them.
+    private func placedHere(_ set: NavPointSet) -> some View {
+        Panel(title: "Placed on this phone") {
+            Text("\(set.points.count) point(s) placed in the room.")
+                .font(Theme.Typeface.body)
+                .foregroundStyle(Theme.Palette.text)
+
+            if set.points.count < 3 {
+                Text("Place at least three, spread out and not in a line. Two points leave the "
+                   + "scan free to spin about the line between them; three fix it.")
+                    .font(Theme.Typeface.caption)
+                    .foregroundStyle(Theme.Palette.caution)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("Enough to register the scan. Send it back, then in PIXMYD-Nav press "
+                   + "Seed phone points and click each id on the model — the fit is computed "
+                   + "there, where both frames finally exist at once.")
+                    .font(Theme.Typeface.caption)
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            FieldButton(title: "Place another point", systemImage: "mappin.and.ellipse") {
+                placing = true
+            }
+
+            FieldButton(title: "Send a scan back", systemImage: "arrow.up.doc", role: .primary) {
+                uploading = true
+            }
+            .disabled(projects.projects.isEmpty || set.points.isEmpty)
+            .opacity(projects.projects.isEmpty || set.points.isEmpty ? 0.5 : 1)
         }
     }
 
@@ -154,19 +223,34 @@ struct SiteBundleView: View {
     private func points(_ set: NavPointSet) -> some View {
         VStack(spacing: Theme.Metrics.gutterTight) {
             ForEach(set.points) { point in
-                NavigationLink {
-                    NavPointDetailView(bundle: bundle, point: point)
-                } label: {
-                    NavPointRow(
-                        point: point,
-                        observed: site.observation(setId: set.setId, pointId: point.id) != nil
-                    )
+                if set.isCaptureFrame {
+                    // No detail screen for a mark placed here: it has no grid
+                    // reference, no photo and no id to go and locate — that
+                    // screen would be a Locate button that means nothing.
+                    NavPointRow(point: point, observed: true)
+                        .contextMenu {
+                            Button("Remove \(point.id)", role: .destructive) {
+                                try? site.removeLocalPoint(id: point.id)
+                            }
+                        }
+                } else {
+                    NavigationLink {
+                        NavPointDetailView(bundle: current, point: point)
+                    } label: {
+                        NavPointRow(
+                            point: point,
+                            observed: site.observation(setId: set.setId, pointId: point.id) != nil
+                        )
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
             if set.points.isEmpty {
                 Panel {
-                    Text("This set has no points in it yet.")
+                    Text(set.isCaptureFrame
+                         ? "No marks placed yet. Aim at something you will recognise in the "
+                         + "model, and tap."
+                         : "This set has no points in it yet.")
                         .font(Theme.Typeface.body)
                         .foregroundStyle(Theme.Palette.textSecondary)
                 }
@@ -185,14 +269,28 @@ struct SiteBundleView: View {
                     .font(Theme.Typeface.caption)
                     .foregroundStyle(Theme.Palette.textSecondary)
             }
-            if !ar.hasGeometry {
+            if ar.hasGeometry {
+                FieldButton(title: "Place it in the room", systemImage: "arkit", role: .primary) {
+                    showingModel = true
+                }
+                Text(current.pointSet == nil
+                     ? "There is no point set beside this model, so it can only be dropped by "
+                     + "hand and nudged into place. That is enough to see where things are; it "
+                     + "is not enough to measure against."
+                     : "Anchor it on the points from this set: pick one, aim at the real thing, "
+                     + "tap. One anchor pins it, two turn it, three make the turn trustworthy.")
+                    .font(Theme.Typeface.caption)
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
                 Text("No geometry was exported with this bundle, so the model cannot be drawn over "
-                   + "the room. The box and the reference photo still show where it is.")
+                   + "the room. The box and the reference photo still show where it is. "
+                   + "Re-export it from PIXMYD-Nav with \"Include model geometry\" ticked.")
                     .font(Theme.Typeface.caption)
                     .foregroundStyle(Theme.Palette.caution)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if let image = bundle.file(ar.image), let ui = UIImage(contentsOfFile: image.path) {
+            if let image = current.file(ar.image), let ui = UIImage(contentsOfFile: image.path) {
                 Image(uiImage: ui)
                     .resizable()
                     .scaledToFit()

@@ -171,7 +171,7 @@ struct CaptureExportRequest {
         device: CaptureDevice,
         pointSet: NavPointSet,
         correspondences: [CaptureCorrespondence],
-        geometryFile: String = "capture.glb",
+        geometryFile: String = "capture.fbx",
         geometryBytes: Int
     ) {
         self.captureId = captureId

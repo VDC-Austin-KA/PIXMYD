@@ -17,6 +17,7 @@ struct SiteView: View {
     @State private var message: Message?
     @State private var pendingTicket: TransferTicket?
     @State private var resolvedPoint: ResolvedNavPoint?
+    @State private var placing = false
 
     struct Message: Identifiable {
         let id = UUID()
@@ -62,6 +63,16 @@ struct SiteView: View {
         .sheet(item: $pendingTicket) { ticket in
             TransferView(ticket: ticket)
         }
+        .fullScreenCover(isPresented: $placing) {
+            PlacePointView(nextId: site.localBundle?.pointSet?.nextLocalPointId ?? "P001") { observed in
+                do {
+                    try site.placeLocalPoint(at: observed)
+                } catch {
+                    placing = false
+                    message = Message(title: "Could not save the point", detail: "\(error)")
+                }
+            }
+        }
         .sheet(item: $resolvedPoint) { resolved in
             NavigationStack {
                 NavPointDetailView(bundle: resolved.bundle, point: resolved.point)
@@ -93,6 +104,12 @@ struct SiteView: View {
             FieldButton(title: "Import a folder", systemImage: "folder.badge.plus") {
                 importing = true
             }
+            // The path for a crew that got to the building before the model
+            // did. Everything above assumes the workstation went first; this
+            // one does not, and on a site visit that is the common case.
+            FieldButton(title: "Place points here", systemImage: "mappin.and.ellipse") {
+                placing = true
+            }
         }
     }
 
@@ -105,6 +122,11 @@ struct SiteView: View {
                 .fixedSize(horizontal: false, vertical: true)
             Text("Both paths end up in the same place. The transfer is faster; the folder works "
                + "with no network at all.")
+                .font(Theme.Typeface.caption)
+                .foregroundStyle(Theme.Palette.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Or place points here with nothing imported at all: tap the marks you can see, "
+               + "send the scan back, and pick the same ids on the model in Navisworks.")
                 .font(Theme.Typeface.caption)
                 .foregroundStyle(Theme.Palette.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)

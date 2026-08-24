@@ -29,9 +29,17 @@ enum CaptureUploadError: Error, CustomStringConvertible {
 }
 
 enum CaptureUpload {
-    static let geometryFileName = "capture.glb"
+    // FBX, not GLB. Appending a file is the only way a Navisworks plugin can
+    // put geometry into an open document, and Navisworks does not read glTF —
+    // so every scan sent as a GLB arrived as a capture the plugin could
+    // describe and not place. The mesh is written in centimetres, which is
+    // FBX's native unit: a reader that honours `UnitScaleFactor` and one that
+    // assumes centimetres then agree, and the scan is the right size either way.
+    static let geometryFileName = "capture.fbx"
+    static let pointsFileName = "points.json"
 
-    /// Build `capture.json` + `capture.glb` for a processed project.
+    /// Build `capture.json` + `capture.fbx` + `points.json` for a processed
+    /// project.
     ///
     /// `solved` is optional: the contract calls a capture with raw
     /// correspondences and no solution "the useful degraded mode, not an
@@ -51,19 +59,21 @@ enum CaptureUpload {
             throw CaptureUploadError.noGeometry
         }
 
-        // Written through the existing GLB writer rather than a second one.
-        // `Exporters.writeGlb` is the format code the rest of the app ships and
-        // its output is what every other consumer in the suite already reads.
+        // Written through the pipeline's own writer rather than a second one,
+        // so the mesh in a sent capture is byte-for-byte what the export sheet
+        // produces for the same scan — including the baked colour atlas, which
+        // a hand-rolled call here would have quietly dropped.
         let scratch = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-            .appendingPathComponent("capture-\(UUID().uuidString).glb")
+            .appendingPathComponent("capture-\(UUID().uuidString).fbx")
         defer { try? FileManager.default.removeItem(at: scratch) }
 
-        try Exporters.writeGlb(
-            positions: mesh.positions,
-            normals: mesh.normals,
-            colors: mesh.colors,
-            indices: mesh.indices,
-            to: scratch
+        _ = try ProcessingPipeline.writeMesh(
+            mesh,
+            format: .fbx,
+            to: scratch,
+            project: project,
+            quality: .balanced,
+            integrated: project.frameCount
         )
         let geometry = try Data(contentsOf: scratch)
 
@@ -77,10 +87,19 @@ enum CaptureUpload {
             geometryBytes: geometry.count
         )
 
-        return [
+        var files: [String: Data] = [
             CaptureExport.fileName: Data(CaptureExport.render(request, solved: solved).utf8),
             geometryFileName: geometry,
         ]
+
+        // The set travels with the capture. For a set the phone authored this
+        // is the only copy that exists — PIXMYD-Nav's "Seed phone points" reads
+        // it to learn which ids to place on the model — and for an imported set
+        // it is a harmless echo of what the workstation already has.
+        if let points = try? pointSet.renderJson() {
+            files[pointsFileName] = points
+        }
+        return files
     }
 
     /// Write the package into a folder, for the share-sheet path.

@@ -92,7 +92,16 @@ struct NavProvenance: Codable, Equatable {
     var sourceUnits: String
     var targetUnits: String
     var upAxis: String
+    /// The up axis the source document had, before the AR export turned its
+    /// coordinates into glTF's Y-up. Empty in files written before the field
+    /// existed, where Z is the safe reading: Navisworks documents are Z-up
+    /// except when someone has gone out of their way.
+    var sourceUpAxis: String
     var originMode: String
+    /// `"capture"` when the coordinates in this file are the phone's own AR
+    /// coordinates rather than the model's. Empty means the model's, which is
+    /// what every set exported by PIXMYD-Nav is.
+    var frame: String
     var appliedOffset: [Double]
     var offsetNote: String?
     var exportedUtc: String?
@@ -102,7 +111,9 @@ struct NavProvenance: Codable, Equatable {
         case sourceUnits    = "navex:sourceUnits"
         case targetUnits    = "navex:targetUnits"
         case upAxis         = "navex:upAxis"
+        case sourceUpAxis   = "navex:sourceUpAxis"
         case originMode     = "navex:originMode"
+        case frame          = "pixmyd:frame"
         case appliedOffset  = "navex:appliedOffset"
         case offsetNote     = "navex:offsetNote"
         case exportedUtc    = "navex:exportedUtc"
@@ -114,7 +125,9 @@ struct NavProvenance: Codable, Equatable {
         sourceUnits    = try c.decodeIfPresent(String.self, forKey: .sourceUnits) ?? ""
         targetUnits    = try c.decodeIfPresent(String.self, forKey: .targetUnits) ?? "Meters"
         upAxis         = try c.decodeIfPresent(String.self, forKey: .upAxis) ?? "Z"
+        sourceUpAxis   = try c.decodeIfPresent(String.self, forKey: .sourceUpAxis) ?? ""
         originMode     = try c.decodeIfPresent(String.self, forKey: .originMode) ?? ""
+        frame          = try c.decodeIfPresent(String.self, forKey: .frame) ?? ""
         appliedOffset  = try c.decodeIfPresent([Double].self, forKey: .appliedOffset) ?? [0, 0, 0]
         offsetNote     = try c.decodeIfPresent(String.self, forKey: .offsetNote)
         exportedUtc    = try c.decodeIfPresent(String.self, forKey: .exportedUtc)
@@ -125,7 +138,9 @@ struct NavProvenance: Codable, Equatable {
         sourceUnits: String,
         targetUnits: String = "Meters",
         upAxis: String = "Z",
+        sourceUpAxis: String = "",
         originMode: String = "",
+        frame: String = "",
         appliedOffset: [Double] = [0, 0, 0],
         offsetNote: String? = nil,
         exportedUtc: String? = nil
@@ -134,7 +149,9 @@ struct NavProvenance: Codable, Equatable {
         self.sourceUnits = sourceUnits
         self.targetUnits = targetUnits
         self.upAxis = upAxis
+        self.sourceUpAxis = sourceUpAxis
         self.originMode = originMode
+        self.frame = frame
         self.appliedOffset = appliedOffset
         self.offsetNote = offsetNote
         self.exportedUtc = exportedUtc
@@ -148,7 +165,26 @@ struct NavProvenance: Codable, Equatable {
     /// silently drawing a model 3.28x too big.
     var isMetric: Bool {
         let u = targetUnits.lowercased()
-        return u.hasPrefix("met") || u == "m"
+        // Empty counts as metres. The contract fixes target units at metres, so
+        // a file that declares nothing is declaring the only legal value — and
+        // PIXMYD-Nav shipped for a while writing exactly that, which put "this
+        // export is not in metres" in front of users whose export was in
+        // metres. Reading silence as the default it already is beats being
+        // loudly wrong about a correct file.
+        return u.isEmpty || u.hasPrefix("met") || u == "m"
+    }
+
+    /// True when the coordinates in this file were turned out of a Z-up
+    /// document into glTF's Y-up on the way out.
+    ///
+    /// It matters because the turn is applied to the geometry and the bounding
+    /// box but not to `appliedOffset`, which stays in the source document's
+    /// frame — so anything crossing between a `points.json` and an
+    /// `ar-model.json` has to subtract the offset first and turn second, in
+    /// that order.
+    var turnedToYUp: Bool {
+        let source = sourceUpAxis.isEmpty ? "Z" : sourceUpAxis
+        return source.uppercased() == "Z" && upAxis.uppercased() == "Y"
     }
 
     /// Model world coordinate for a point in the exported frame.
@@ -312,6 +348,21 @@ struct NavPointSet: Codable, Equatable {
     /// Short by design: QR density drives printed marker legibility, and a
     /// longer symbol photographs badly on a dusty column under site lighting.
     var shortId: String { String(setId.prefix(8)) }
+
+    /// True when the positions are the phone's own AR coordinates, so there is
+    /// nothing to solve against until the same ids are placed on the model.
+    var isCaptureFrame: Bool { provenance.frame.lowercased() == "capture" }
+
+    /// Render this set as a `points.json`.
+    ///
+    /// PIXMYD-Nav reads exactly this file out of an arriving capture folder to
+    /// learn which ids to place on the model, so a set the phone authored has
+    /// to travel back in the same shape a set exported by the plugin arrives in.
+    func renderJson() throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try encoder.encode(self)
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
