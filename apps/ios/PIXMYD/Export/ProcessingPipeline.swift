@@ -99,8 +99,13 @@ final class ProcessingPipeline: ObservableObject {
                     } else if format.kind == .mesh {
                         let written = try Self.writeMesh(
                             cached.mesh, format: format, to: url,
-                            project: project, quality: quality, integrated: cached.meta.integratedFrames
-                        )
+                            project: project, quality: quality,
+                            integrated: cached.meta.integratedFrames
+                        ) { stage, fraction in
+                            Task { @MainActor in
+                                self.state = .running(stage: stage, fraction: fraction)
+                            }
+                        }
                         await MainActor.run { self.state = .finished(urls: written, summary: summary) }
                     } else {
                         guard let points = cached.points else {
@@ -165,7 +170,11 @@ final class ProcessingPipeline: ObservableObject {
                 let written = try Self.writeMesh(
                     mesh, format: format, to: url,
                     project: project, quality: quality, integrated: integratedFrames
-                )
+                ) { stage, fraction in
+                    Task { @MainActor in
+                        self.state = .running(stage: stage, fraction: fraction)
+                    }
+                }
                 let summary = "\(mesh.positions.count) vertices, "
                     + "\(mesh.indices.count / 3) triangles, as edited."
                 await MainActor.run {
@@ -246,44 +255,59 @@ final class ProcessingPipeline: ObservableObject {
         to url: URL,
         project: CaptureProject,
         quality: Quality,
-        integrated: Int
+        integrated: Int,
+        progress: ((String, Double) -> Void)? = nil
     ) throws -> [URL] {
+        // Every textured format wants the same atlas, so it is baked once here
+        // rather than three times below. Projecting the captured photographs
+        // back onto the mesh is what makes a label readable; the flat
+        // per-triangle bake is the fallback for a capture whose frames are gone
+        // or whose geometry no frame can see.
+        let atlas: ColorAtlas?
+        switch format {
+        case .obj, .fbx, .glb, .html:
+            atlas = try texturedAtlas(
+                mesh: mesh, project: project, quality: quality, progress: progress
+            )
+        default:
+            atlas = nil
+        }
+        let polygonUvs = atlas.map { ColorAtlasBaker.polygonUvs(of: $0, for: mesh.indices) }
+
+        // glTF has one texture coordinate per vertex and no second index, so a
+        // texture there costs a threefold vertex expansion. Worth it for a
+        // photographic atlas; not worth it for the flat one, whose single texel
+        // per face says exactly what COLOR_0 already said in a third of the
+        // bytes. So GLB takes the texture only when there is real detail in it.
+        let glbAtlas: ColorAtlas? = atlas?.cornerUvs == nil ? nil : atlas
+
         switch format {
         case .glb:
             try Exporters.writeGlb(
                 positions: mesh.positions, normals: mesh.normals,
-                colors: mesh.colors, indices: mesh.indices, to: url
+                colors: mesh.colors, indices: mesh.indices,
+                polygonUvs: glbAtlas?.cornerUvs, texture: glbAtlas?.texture, to: url
             )
             return [url]
         case .obj:
             // The colour a fused scan has is per vertex, which most OBJ
             // importers ignore — the file arrives grey and looks broken when
-            // the data was fine all along. Baking the colours into a texture
-            // atlas is what "colour" means for an OBJ; no colours is a normal
-            // mesh, not an error, so the writer runs untextured.
-            let atlas = try ColorAtlasBaker.bake(
-                colors: mesh.colors,
-                indices: mesh.indices,
-                vertexCount: mesh.positions.count
-            )
+            // the data was fine all along. A texture is what "colour" means for
+            // an OBJ; no colours and no frames is a normal mesh, not an error,
+            // so the writer runs untextured.
             return try Exporters.writeObj(
                 positions: mesh.positions, normals: mesh.normals,
                 colors: mesh.colors, indices: mesh.indices,
                 atlas: atlas, to: url
             )
         case .fbx:
-            // Same bake as OBJ, but FBX can carry the texture *inside* the
-            // single file instead of as sidecars: the atlas's per-triangle UVs
-            // are flattened to per-polygon-corner and the PNG is embedded.
-            let atlas = try ColorAtlasBaker.bake(
-                colors: mesh.colors,
-                indices: mesh.indices,
-                vertexCount: mesh.positions.count
-            )
+            // Same atlas as OBJ, but FBX carries the texture *inside* the
+            // single file instead of as sidecars: the per-corner UVs go into a
+            // `ByPolygonVertex` layer and the PNG is embedded.
             try Exporters.writeFbx(
                 positions: mesh.positions, normals: mesh.normals,
                 colors: mesh.colors, indices: mesh.indices,
-                polygonUvs: atlas.map { ColorAtlasBaker.polygonUvs(of: $0, for: mesh.indices) },
+                polygonUvs: polygonUvs,
                 texture: atlas?.texture,
                 to: url
             )
@@ -294,7 +318,8 @@ final class ProcessingPipeline: ObservableObject {
             let glbURL = url.deletingPathExtension().appendingPathExtension("embedded.glb")
             try Exporters.writeGlb(
                 positions: mesh.positions, normals: mesh.normals,
-                colors: mesh.colors, indices: mesh.indices, to: glbURL
+                colors: mesh.colors, indices: mesh.indices,
+                polygonUvs: glbAtlas?.cornerUvs, texture: glbAtlas?.texture, to: glbURL
             )
             defer { try? FileManager.default.removeItem(at: glbURL) }
 
@@ -326,6 +351,139 @@ final class ProcessingPipeline: ObservableObject {
             )
             return [url]
         }
+    }
+
+    /// Frames scored when choosing which photograph paints which triangle.
+    ///
+    /// A twenty-minute walk-through is thousands of frames and scoring is
+    /// linear in frames times triangles, which is the one place this could get
+    /// genuinely slow. Beyond this the frames are strided rather than
+    /// truncated: coverage is what matters, and an evenly spaced six hundred
+    /// covers the same walk as all four thousand while the last four hundred of
+    /// a truncated list would leave three quarters of the building untextured.
+    nonisolated static let maximumTexturingFrames = 600
+
+    /// The colour atlas for a mesh: photographs where they exist, the fused
+    /// vertex colours where they do not.
+    ///
+    /// Returns nil only when there is no colour at all to write, which is a
+    /// normal mesh rather than an error.
+    nonisolated static func texturedAtlas(
+        mesh: TsdfVolume.Mesh,
+        project: CaptureProject,
+        quality: Quality,
+        progress: ((String, Double) -> Void)? = nil
+    ) throws -> ColorAtlas? {
+        func flat() throws -> ColorAtlas? {
+            try ColorAtlasBaker.bake(
+                colors: mesh.colors, indices: mesh.indices, vertexCount: mesh.positions.count
+            )
+        }
+        guard !mesh.indices.isEmpty else { return try flat() }
+
+        // Everything below needs the capture that produced the mesh. A mesh
+        // loaded from a saved result whose frames have been cleared is still a
+        // mesh, and still exports — with the colour it already has.
+        guard let manifestData = try? Data(
+                  contentsOf: project.url.appendingPathComponent("manifest.json")),
+              let manifest = try? JSONDecoder().decode(CaptureManifest.self, from: manifestData),
+              let framesText = try? String(
+                  contentsOf: project.url.appendingPathComponent("frames.jsonl"),
+                  encoding: .utf8)
+        else { return try flat() }
+
+        let decoder = JSONDecoder()
+        var frames: [Frame] = []
+        for line in framesText.split(separator: "\n") {
+            guard let data = line.data(using: .utf8),
+                  let frame = try? decoder.decode(Frame.self, from: data),
+                  frame.pose != nil else { continue }
+            frames.append(frame)
+        }
+        guard !frames.isEmpty else { return try flat() }
+
+        if frames.count > maximumTexturingFrames {
+            let gap = Double(frames.count) / Double(maximumTexturingFrames)
+            let all = frames
+            frames = (0..<maximumTexturingFrames).map { all[Int(Double($0) * gap)] }
+        }
+
+        guard let layout = PhotoTextureBaker.plan(
+            positions: mesh.positions,
+            indices: mesh.indices,
+            options: {
+                var options = PhotoTextureBaker.Options()
+                options.targetTexelMetres = quality.photoTexelMetres
+                return options
+            }()
+        ) else { return try flat() }
+
+        let baker = PhotoTextureBaker(
+            positions: mesh.positions, indices: mesh.indices, layout: layout
+        )
+
+        // --- which frame paints which triangle ---
+        //
+        // Geometry only. Deciding this before any JPEG is decoded means the
+        // frames that win nothing are never decoded at all, and on a walk-round
+        // of one room that is most of them.
+        var views: [Int: PhotoTextureBaker.SourceView] = [:]
+        for (index, frame) in frames.enumerated() {
+            try Task.checkCancellation()
+            guard let pose = frame.pose,
+                  manifest.cameras.indices.contains(frame.camera),
+                  case .pinhole(let camera) = manifest.cameras[frame.camera],
+                  camera.width > 0, camera.height > 0 else { continue }
+            let view = PhotoTextureBaker.SourceView(camera: camera, pose: pose)
+            views[index] = view
+
+            var raster: PhotoTextureBaker.DepthRaster?
+            if let ref = frame.depth,
+               case .pinhole(let depthCamera)? = ref.camera,
+               let metres = loadDepth(bundle: project.url, ref: ref) {
+                raster = PhotoTextureBaker.DepthRaster(
+                    metres: metres, width: ref.width, height: ref.height, camera: depthCamera
+                )
+            }
+            baker.consider(view: view, index: index, depth: raster)
+
+            if index % 20 == 0 {
+                progress?(
+                    "Choosing views", 0.90 + 0.03 * Double(index) / Double(frames.count)
+                )
+            }
+        }
+
+        // --- paint ---
+        let used = Set(baker.assignments.filter { $0 >= 0 }.map { Int($0) }).sorted()
+        guard !used.isEmpty else { return try flat() }
+
+        for (step, index) in used.enumerated() {
+            try Task.checkCancellation()
+            guard let view = views[index],
+                  index < frames.count,
+                  let image = loadColor(bundle: project.url, uri: frames[index].imageUri)
+            else { continue }
+            baker.paint(
+                index: index, view: view,
+                pixels: image.pixels, width: image.width, height: image.height
+            )
+            if step % 5 == 0 {
+                // The texel size is the answer to "will the tag be readable",
+                // so it is said out loud while the work is happening rather
+                // than buried in a summary afterwards.
+                progress?(
+                    String(format: "Painting texture at %.1f mm", layout.texelMetres * 1000),
+                    0.93 + 0.06 * Double(step) / Double(used.count)
+                )
+            }
+        }
+
+        // Triangles no frame could see keep the colour fusion gave them. Grey
+        // there would read as a hole in the building rather than as a surface
+        // nobody photographed head-on.
+        baker.fillUnassigned(colors: mesh.colors)
+        return try baker.finish()
     }
 
     /// Where exports are put, and the filename for one.
@@ -397,8 +555,8 @@ final class ProcessingPipeline: ObservableObject {
             var colorCamera: CameraModel.Pinhole?
             if manifest.cameras.indices.contains(frame.camera),
                case .pinhole(let fullRes) = manifest.cameras[frame.camera],
-               let pixels = loadColor(bundle: project.url, uri: frame.imageUri) {
-                color = pixels
+               let image = loadColor(bundle: project.url, uri: frame.imageUri) {
+                color = image.pixels
                 colorCamera = fullRes
             }
 
@@ -510,7 +668,8 @@ final class ProcessingPipeline: ObservableObject {
             await progress("Writing \(format.title)", 0.9)
             written = try writeMesh(
                 mesh, format: format, to: url,
-                project: project, quality: quality, integrated: integrated
+                project: project, quality: quality, integrated: integrated,
+                progress: { stage, fraction in Task { await progress(stage, fraction) } }
             )
 
         case .points, .either:
@@ -605,7 +764,7 @@ final class ProcessingPipeline: ObservableObject {
     // else static on this class they inherit its @MainActor isolation unless
     // told otherwise, and `process` — which is nonisolated — is their only
     // caller.
-    nonisolated private static func loadDepth(bundle: URL, ref: DepthMapRef) -> [Float]? {
+    nonisolated static func loadDepth(bundle: URL, ref: DepthMapRef) -> [Float]? {
         guard let data = try? Data(contentsOf: bundle.appendingPathComponent(ref.uri)) else {
             return nil
         }
@@ -629,7 +788,9 @@ final class ProcessingPipeline: ObservableObject {
 
     /// Decodes the frame's JPEG to top-row-first RGBA8. Colour is fused at
     /// full sensor resolution; the 256×192 depth map only decides visibility.
-    nonisolated private static func loadColor(bundle: URL, uri: String) -> [UInt8]? {
+    nonisolated static func loadColor(
+        bundle: URL, uri: String
+    ) -> (pixels: [UInt8], width: Int, height: Int)? {
         #if canImport(ImageIO)
         guard let source = CGImageSourceCreateWithURL(
             bundle.appendingPathComponent(uri) as CFURL, nil
@@ -647,7 +808,7 @@ final class ProcessingPipeline: ObservableObject {
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { return nil }
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-        return pixels
+        return (pixels, width, height)
         #else
         return nil
         #endif

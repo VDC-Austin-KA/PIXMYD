@@ -110,6 +110,15 @@ There is a test for exactly that case.
   panorama share one reconstruction path.
 - **TSDF fusion**: sparse-block Curless & Levoy volumetric integration from
   depth frames and poses, with confidence gating and colour.
+- **Photographic texturing**: the mesh is textured by projecting the captured
+  frames back onto it, not by baking the colour fusion left on its vertices.
+  Every triangle gets its own atlas tile sized from how big it is in the world,
+  so texel density is roughly constant in millimetres across the model, and each
+  tile is filled from the single frame that saw that triangle most head-on,
+  closest and unoccluded. Fusion averages colour into 25 mm voxels, which loses
+  a 3 mm letter stroke twice over; a 12-megapixel frame at half a metre resolves
+  about 0.15 mm of wall. That is the difference between a scan that carries a
+  wall's colour and one you can read the valve tag off.
 - **Surface extraction**: marching tetrahedra — 16 unambiguous sign cases per
   tetrahedron rather than 256 cases with genuinely ambiguous configurations, so
   the surface is manifold by construction. Unobserved voxels return *null*

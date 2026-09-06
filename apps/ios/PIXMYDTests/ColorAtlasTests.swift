@@ -18,7 +18,7 @@ final class ColorAtlasTests: XCTestCase {
             0, 0, 255,  255, 255, 255,
         ]
         let png = try PngWriter.encodeRgb(width: 2, height: 2, rgb: rgb)
-        let decoded = try decodePngRgb(Data(png))
+        let decoded = try PngTestReader.decode(Data(png))
         XCTAssertEqual(decoded.width, 2)
         XCTAssertEqual(decoded.height, 2)
         XCTAssertEqual(decoded.rgb, rgb)
@@ -54,7 +54,7 @@ final class ColorAtlasTests: XCTestCase {
         XCTAssertEqual(atlas.side, 2, "two triangles want a 2x2 atlas")
         XCTAssertEqual(atlas.triangleUvs.count, 2)
 
-        let decoded = try decodePngRgb(Data(atlas.texture.data))
+        let decoded = try PngTestReader.decode(Data(atlas.texture.data))
         XCTAssertEqual(decoded.width, 2)
         XCTAssertEqual(decoded.height, 2)
 
@@ -98,16 +98,21 @@ final class ColorAtlasTests: XCTestCase {
 
     // MARK: - Independent PNG decoder
 
-    private struct DecodedPng {
+}
+
+/// Reads a PNG back to pixels with none of the writer's code: verify the
+/// signature, walk the chunks recomputing every CRC, unroll the stored deflate
+/// blocks checking LEN/NLEN, and check the adler32. Shared with the photo
+/// texture tests, which bake through the same encoder.
+enum PngTestReader {
+
+    struct DecodedPng {
         var width: Int
         var height: Int
         var rgb: [UInt8]
     }
 
-    /// Reads a PNG back to pixels with none of the writer's code: verify the
-    /// signature, walk the chunks recomputing every CRC, unroll the stored
-    /// deflate blocks checking LEN/NLEN, and check the adler32.
-    private func decodePngRgb(_ data: Data) throws -> DecodedPng {
+    static func decode(_ data: Data) throws -> DecodedPng {
         XCTAssertEqual(
             [UInt8](data.prefix(8)),
             [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
@@ -183,19 +188,19 @@ final class ColorAtlasTests: XCTestCase {
 
     // MARK: - Independent checksums
 
-    private func beU32(_ data: Data, _ offset: Int) -> UInt32 {
+    static func beU32(_ data: Data, _ offset: Int) -> UInt32 {
         let base = data.startIndex + offset
         return UInt32(data[base]) << 24 | UInt32(data[base + 1]) << 16
             | UInt32(data[base + 2]) << 8 | UInt32(data[base + 3])
     }
 
-    private func leU16(_ data: Data, _ offset: Int) -> UInt16 {
+    static func leU16(_ data: Data, _ offset: Int) -> UInt16 {
         let base = data.startIndex + offset
         return UInt16(data[base]) | UInt16(data[base + 1]) << 8
     }
 
     /// Bit-by-bit CRC-32, so it cannot share a bug with the writer's table.
-    private func crc32(_ bytes: [UInt8]) -> UInt32 {
+    static func crc32(_ bytes: [UInt8]) -> UInt32 {
         var c: UInt32 = 0xFFFF_FFFF
         for byte in bytes {
             c ^= UInt32(byte)
@@ -206,7 +211,7 @@ final class ColorAtlasTests: XCTestCase {
         return c ^ 0xFFFF_FFFF
     }
 
-    private func adler32(_ bytes: [UInt8]) -> UInt32 {
+    static func adler32(_ bytes: [UInt8]) -> UInt32 {
         var a: UInt32 = 1
         var b: UInt32 = 0
         for byte in bytes {

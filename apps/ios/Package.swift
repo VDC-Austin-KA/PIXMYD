@@ -38,6 +38,7 @@ let portableSources = [
     "Export/PngWriter.swift",
     "Export/GlbReader.swift",
     "Export/ColorAtlas.swift",
+    "Export/PhotoTexture.swift",
     "Export/FbxWriter.swift",
     "Export/TsdfVolume.swift",
     "Export/MeshSimplify.swift",
