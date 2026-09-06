@@ -536,11 +536,9 @@ private struct ArModelContainer: UIViewRepresentable {
             guard let view, let frame = view.session.currentFrame else { return }
             let centre = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
             var target: SIMD3<Float>?
-            // `raycastQuery` is non-optional as of Xcode 26; binding it with
-            // `if let` is a compile error rather than a warning.
-            let query = view.raycastQuery(
-                from: centre, allowing: .estimatedPlane, alignment: .any)
-            if let hit = view.session.raycast(query).first {
+            if let query = view.raycastQuery(
+                from: centre, allowing: .estimatedPlane, alignment: .any),
+               let hit = view.session.raycast(query).first {
                 target = SIMD3<Float>(
                     hit.worldTransform.columns.3.x,
                     hit.worldTransform.columns.3.y,
