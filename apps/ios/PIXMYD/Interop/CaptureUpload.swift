@@ -101,6 +101,17 @@ enum CaptureUpload {
             normals = normals.map { $0.map { bake(direction: $0, with: bakeable.solution) } }
         }
 
+        // The photographs are projected onto the *captured* geometry, because
+        // that is the frame the camera poses are in. The UVs that come back are
+        // per polygon corner and say nothing about position, so they are still
+        // correct once the mesh has been moved into the model's frame above —
+        // which is why this runs after the bake rather than before it.
+        let atlas = try? ProcessingPipeline.texturedAtlas(
+            mesh: mesh,
+            project: project,
+            quality: ProcessingQuality.matching(voxelSize: loaded.meta.voxelSize)
+        ) { stage, _ in onProgress(stage + "…") }
+
         onProgress("Writing \(geometryFileName)…")
 
         // FBX declares Y as its up axis, so geometry that is Z-up in its own
@@ -119,6 +130,8 @@ enum CaptureUpload {
             normals: normals,
             colors: mesh.colors,
             indices: mesh.indices,
+            polygonUvs: atlas.map { ColorAtlasBaker.polygonUvs(of: $0, for: mesh.indices) },
+            texture: atlas?.texture,
             options: FbxWriter.WriteOptions(name: project.name, units: .cm, zUpToYUp: zUp),
             to: scratch
         )

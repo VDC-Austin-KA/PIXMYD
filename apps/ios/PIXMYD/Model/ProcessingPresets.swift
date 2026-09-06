@@ -51,6 +51,25 @@ enum ProcessingQuality: String, CaseIterable, Identifiable {
             ?? .balanced
     }
 
+    /// Metres per texel to aim for when projecting the captured photographs
+    /// back onto the mesh.
+    ///
+    /// Deliberately far finer than the voxel size, and not derived from it. The
+    /// two answer different questions: the voxel decides where the surface is,
+    /// the texel decides what is written on it. A 12-megapixel frame at two
+    /// metres resolves about half a millimetre of wall, so asking for one is
+    /// asking the camera for what it already has — and it is roughly the size
+    /// at which printed plant tagging becomes readable rather than merely
+    /// present. The atlas has a ceiling, so on a large model the baker coarsens
+    /// this until the whole model fits rather than sharpening part of it.
+    var photoTexelMetres: Float {
+        switch self {
+        case .fast: 0.004
+        case .balanced: 0.002
+        case .fine: 0.001
+        }
+    }
+
     /// Frames processed per second, measured on an A17-class device. Used
     /// only for the time estimate — a wrong estimate is better than none,
     /// but it should be roughly right.
