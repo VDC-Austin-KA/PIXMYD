@@ -161,6 +161,8 @@ struct ProjectDetailView: View {
     @EnvironmentObject private var router: AppRouter
     @StateObject private var processor = ProcessingPipeline()
     @State private var showExport = false
+    /// Whether opening the export sheet should discard the saved result.
+    @State private var exportReprocesses = false
     @State private var showSend = false
 
     private var project: CaptureProject? {
@@ -227,6 +229,7 @@ struct ProjectDetailView: View {
                     }
                 }
 
+                savedResult(project)
                 controlPoints(project)
                 actions(project)
             }
@@ -234,7 +237,7 @@ struct ProjectDetailView: View {
         }
         .background(Theme.Palette.background)
         .sheet(isPresented: $showExport) {
-            ExportSheet(project: project)
+            ExportSheet(project: project, reprocess: exportReprocesses)
         }
         .sheet(isPresented: $showSend) {
             // No point set from the workstation: this scan carries the points
@@ -250,11 +253,52 @@ struct ProjectDetailView: View {
                 viewProject(project)
             }
         }
-        .fullScreenCover(isPresented: reviewBinding) {
+        // Not while the export sheet is up. Both screens watch the same
+        // `processor.state`, and this cover would win because it is the
+        // parent's -- so an export that asked to be reviewed first landed in
+        // the viewer that only *saves*, and no file was ever written. The last
+        // export on disk then stayed whatever it had been, which reads exactly
+        // like "it always exports the same format".
+        .fullScreenCover(isPresented: showExport ? .constant(false) : reviewBinding) {
             if let mesh = processor.reviewMesh {
                 ModelViewer(mesh: mesh) { edited in
                     processor.saveReviewed(mesh: edited, project: project)
                 }
+            }
+        }
+    }
+
+    /// What the saved result actually is.
+    ///
+    /// "Processed" used to be the whole story, and it invited a reasonable
+    /// wrong conclusion: that the scan had been processed *as a format*, and
+    /// was therefore stuck in one. It never was. Fusion produces a mesh and a
+    /// point cloud; a format is chosen at export and costs nothing but the
+    /// write, which is why exporting a second one does not re-fuse anything.
+    ///
+    /// So this says what is on disk in the terms that decide whether it is
+    /// worth keeping -- how much geometry, at what resolution, from how many
+    /// frames -- and says out loud that the format is not among them.
+    @ViewBuilder
+    private func savedResult(_ project: CaptureProject) -> some View {
+        if let meta = ProcessedArtifact.meta(in: project.url),
+           meta.meshTriangles > 0 || meta.pointsCount > 0 {
+            Panel(title: "Saved result") {
+                HStack(spacing: Theme.Metrics.gutter * 1.4) {
+                    if meta.meshTriangles > 0 {
+                        Readout(label: "Triangles", value: "\(meta.meshTriangles)")
+                    }
+                    if meta.pointsCount > 0 {
+                        Readout(label: "Points", value: "\(meta.pointsCount)")
+                    }
+                    Readout(label: "Detail", value: "\(Int(meta.voxelSize * 1000)) mm")
+                    Readout(label: "Frames", value: "\(meta.integratedFrames)")
+                }
+                Text("Geometry, not a file. Any export format is written from this without "
+                   + "re-fusing — reprocess only when the geometry itself needs to change.")
+                    .font(Theme.Typeface.caption)
+                    .foregroundStyle(Theme.Palette.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -316,7 +360,10 @@ struct ProjectDetailView: View {
             // A failed result is re-runnable, and a processed one can be
             // rebuilt from the raw frames when the saved result is wrong.
             if project.state == .failed || project.state == .processed {
-                FieldButton(title: "Reprocess", systemImage: "arrow.clockwise", role: .secondary) {
+                // Rebuilds the geometry and shows it. No format here: nothing
+                // is written, so naming one would be a choice with no effect --
+                // which is what it used to be.
+                FieldButton(title: "Rebuild", systemImage: "arrow.clockwise", role: .secondary) {
                     processor.run(
                         project: project,
                         format: .fbx,
@@ -329,7 +376,23 @@ struct ProjectDetailView: View {
             }
 
             FieldButton(title: "Export", systemImage: "square.and.arrow.up", role: .primary) {
+                exportReprocesses = false
                 showExport = true
+            }
+
+            // A saved result is a mesh, not a file, so a second format costs
+            // nothing but the write. This is the same sheet with the saved
+            // result thrown away first, for when the geometry itself is what
+            // needs to change.
+            if project.state == .processed {
+                FieldButton(
+                    title: "Reprocess as a different format…",
+                    systemImage: "square.on.square.badge.person.crop",
+                    role: .secondary
+                ) {
+                    exportReprocesses = true
+                    showExport = true
+                }
             }
         }
     }
