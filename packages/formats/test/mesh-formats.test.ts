@@ -282,9 +282,11 @@ test('FBX node offsets are self-consistent end to end', () => {
   // so simply completing the walk is the assertion.
   const nodes = parseFbx(writeMeshFbx(quad()));
   const names = nodes.map((n) => n.name);
+  // The same sections, in the same order, as an FBX written by Autodesk's own
+  // SDK. That list is the spec as far as a black-box reader is concerned.
   assert.deepEqual(names, [
-    'FBXHeaderExtension', 'Creator', 'GlobalSettings', 'Documents', 'References',
-    'Definitions', 'Objects', 'Connections',
+    'FBXHeaderExtension', 'FileId', 'CreationTime', 'Creator', 'GlobalSettings',
+    'Documents', 'References', 'Definitions', 'Objects', 'Connections', 'Takes',
   ]);
 });
 
@@ -297,6 +299,19 @@ test('FBX carries the header block and scene document Autodesk looks for', () =>
   const header = nodes.find((n) => n.name === 'FBXHeaderExtension');
   const stamp = header?.children.find((n) => n.name === 'CreationTimeStamp');
   assert.ok(stamp, 'FBXHeaderExtension carries a CreationTimeStamp');
+  assert.equal(header?.children.find((n) => n.name === 'FBXHeaderVersion')?.props[0], 1004);
+  assert.ok(header?.children.find((n) => n.name === 'SceneInfo'), 'and a SceneInfo');
+
+  // FileId is the source id encrypted once with the creation stamp, and the
+  // footer code is that same value two encryptions further on. Sixteen bytes
+  // that are not all zero is the cheap end of asserting they are one chain.
+  const id = nodes.find((n) => n.name === 'FileId');
+  assert.equal((id?.props[0] as Uint8Array).length, 16);
+  assert.ok((id?.props[0] as Uint8Array).some((b) => b !== 0), 'FileId is not blank');
+  assert.match(
+    nodes.find((n) => n.name === 'CreationTime')?.props[0] as string,
+    /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}:\d{3}$/,
+  );
   assert.deepEqual(
     stamp!.children.map((n) => n.name),
     ['Version', 'Year', 'Month', 'Day', 'Hour', 'Minute', 'Second', 'Millisecond'],

@@ -126,31 +126,50 @@ function writeProperty(w: ByteWriter, p: FbxProperty): void {
   }
 }
 
-function writeNode(w: ByteWriter, node: FbxNode): void {
+/**
+ * Bytes in a node header, and in the NULL record that terminates a list.
+ *
+ * 7500 widened endOffset, the property count and the property list length from
+ * uint32 to uint64. Everything else about the format is unchanged, so the only
+ * places that care are this function and the two sentinels.
+ */
+function headerWidth(version: number): number {
+  return version >= 7500 ? 25 : 13;
+}
+
+function writeNode(w: ByteWriter, node: FbxNode, version: number): void {
   const nameBytes = new TextEncoder().encode(node.name);
   const props = node.props ?? [];
   const children = node.children ?? [];
+  const wide = version >= 7500;
 
   const endOffsetAt = w.length;
-  w.u32(0); // endOffset, back-patched
-  w.u32(props.length);
+  if (wide) {
+    w.u64(0); // endOffset, back-patched
+    w.u64(props.length);
+  } else {
+    w.u32(0);
+    w.u32(props.length);
+  }
   const propsLenAt = w.length;
-  w.u32(0); // propertyListLen, back-patched
+  if (wide) w.u64(0); else w.u32(0); // propertyListLen, back-patched
   w.u8(nameBytes.length).bytes(nameBytes);
 
   const propsStart = w.length;
   for (const p of props) writeProperty(w, p);
-  w.patchU32(propsLenAt, w.length - propsStart);
+  if (wide) w.patchU64(propsLenAt, w.length - propsStart);
+  else w.patchU32(propsLenAt, w.length - propsStart);
 
   if (children.length > 0) {
-    for (const c of children) writeNode(w, c);
-    // A node with children is terminated by a 13-byte NULL record. A node
-    // without children must NOT have one — an extra sentinel shifts every
-    // subsequent offset and the file parses as truncated.
-    w.fill(0, 13);
+    for (const c of children) writeNode(w, c, version);
+    // A node with children is terminated by a NULL record. A node without
+    // children must NOT have one — an extra sentinel shifts every subsequent
+    // offset and the file parses as truncated.
+    w.fill(0, headerWidth(version));
   }
 
-  w.patchU32(endOffsetAt, w.length);
+  if (wide) w.patchU64(endOffsetAt, w.length);
+  else w.patchU32(endOffsetAt, w.length);
 }
 
 /** The XOR-with-carry cipher the footer code is built with. */
@@ -160,6 +179,49 @@ function encrypt(dst: Uint8Array, src: Uint8Array): void {
     dst[i] = dst[i] ^ (carry ^ src[i]);
     carry = dst[i];
   }
+}
+
+/**
+ * The stamp string the footer encryption is keyed on.
+ *
+ * Its field order is not a date format anybody would choose; it is what the
+ * format does, and the footer is only valid if it matches.
+ */
+function footerStamp(date: Date): Uint8Array {
+  const pad = (n: number, width: number) => String(n).padStart(width, '0');
+  const stamp =
+    pad(date.getSeconds(), 2) +
+    pad(date.getMonth() + 1, 2) +
+    pad(date.getHours(), 2) +
+    pad(date.getDate(), 2) +
+    pad(Math.floor(date.getMilliseconds() / 10), 2) +
+    pad(date.getFullYear(), 4) +
+    pad(date.getMinutes(), 2);
+  return new TextEncoder().encode(stamp);
+}
+
+/**
+ * The file's identity, as the format computes it.
+ *
+ * `FileId` is the well-known source id encrypted once with the creation stamp,
+ * and the footer code is that same value carried two encryptions further. So
+ * emitting it is not decoration: the header, the timestamp and the footer are
+ * one chain, and a reader that checks the file's identity against its footer
+ * finds a file that agrees with itself rather than one missing a link.
+ */
+function fileId(date: Date): Uint8Array {
+  const id = FOOTER_SOURCE_ID.slice();
+  encrypt(id, footerStamp(date));
+  return id;
+}
+
+/** `YYYY-MM-DD HH:MM:SS:mmm`, the spelling the format uses. */
+function creationTime(date: Date): string {
+  const pad = (n: number, width: number) => String(n).padStart(width, '0');
+  return pad(date.getFullYear(), 4) + '-' + pad(date.getMonth() + 1, 2) + '-' +
+    pad(date.getDate(), 2) + ' ' + pad(date.getHours(), 2) + ':' +
+    pad(date.getMinutes(), 2) + ':' + pad(date.getSeconds(), 2) + ':' +
+    pad(date.getMilliseconds(), 3);
 }
 
 function footerCode(date: Date): Uint8Array {
@@ -181,16 +243,20 @@ function footerCode(date: Date): Uint8Array {
   return code;
 }
 
-export function serializeFbx(root: FbxNode[], date = new Date()): Uint8Array {
+export function serializeFbx(
+  root: FbxNode[],
+  date = new Date(),
+  version = FBX_VERSION,
+): Uint8Array {
   const w = new ByteWriter(1 << 18);
 
   // --- header ---
   w.ascii(FBX_HEADER_MAGIC).u8(0x00).u8(0x1a).u8(0x00);
-  w.u32(FBX_VERSION);
+  w.u32(version);
 
-  for (const node of root) writeNode(w, node);
+  for (const node of root) writeNode(w, node, version);
   // Top-level list is terminated by its own NULL record.
-  w.fill(0, 13);
+  w.fill(0, headerWidth(version));
 
   // --- footer ---
   //
@@ -209,7 +275,7 @@ export function serializeFbx(root: FbxNode[], date = new Date()): Uint8Array {
   w.bytes(footerCode(date));
   w.fill(0, 16 - (w.length % 16));
   w.fill(0, 4);
-  w.u32(FBX_VERSION);
+  w.u32(version);
   w.fill(0, 120);
   w.bytes(FOOTER_EXTENSION);
 
@@ -234,6 +300,12 @@ export interface FbxWriteOptions {
   zUpToYUp?: boolean;
   /** Fixed timestamp, so a test can produce byte-identical output. */
   date?: Date;
+  /**
+   * The FBX version to write. 7400 uses 32-bit node offsets; 7500 and above
+   * use 64-bit. Readers are version-specific about far more than the offset
+   * width, so this is the knob for "the consumer will not open 7400".
+   */
+  version?: number;
 }
 
 let nextId = 1000000;
@@ -526,16 +598,67 @@ export function writeMeshFbx(mesh: Mesh, options: FbxWriteOptions = {}): Uint8Ar
     ],
   };
 
+  const stamped = options.date ?? new Date();
+  const version = options.version ?? FBX_VERSION;
   const root: FbxNode[] = [
     {
       name: 'FBXHeaderExtension',
       children: [
-        { name: 'FBXHeaderVersion', props: [P.i32(1003)] },
-        { name: 'FBXVersion', props: [P.i32(FBX_VERSION)] },
-        creationTimeStamp(options.date ?? new Date()),
+        // 1004, and the four siblings below, are what an FBX written by
+        // Autodesk's own SDK carries. A reader that only needs the version and
+        // the creator does not miss them; one that walks the header expecting
+        // the full block can refuse a file that is otherwise perfect.
+        { name: 'FBXHeaderVersion', props: [P.i32(1004)] },
+        { name: 'FBXVersion', props: [P.i32(version)] },
+        { name: 'EncryptionType', props: [P.i32(0)] },
+        creationTimeStamp(stamped),
         { name: 'Creator', props: [P.str('PIXMYD')] },
+        {
+          name: 'SceneInfo',
+          props: [P.str(objectName('GlobalInfo', 'SceneInfo')), P.str('UserData')],
+          children: [
+            { name: 'Type', props: [P.str('UserData')] },
+            { name: 'Version', props: [P.i32(100)] },
+            properties70([
+              {
+                name: 'P',
+                props: [
+                  P.str('DocumentUrl'), P.str('KString'), P.str('Url'), P.str(''),
+                  P.str(`${name}.fbx`),
+                ],
+              },
+              {
+                name: 'P',
+                props: [
+                  P.str('SrcDocumentUrl'), P.str('KString'), P.str('Url'), P.str(''),
+                  P.str(`${name}.fbx`),
+                ],
+              },
+              {
+                name: 'P',
+                props: [
+                  P.str('Original|ApplicationName'), P.str('KString'), P.str(''), P.str(''),
+                  P.str('PIXMYD'),
+                ],
+              },
+              {
+                name: 'P',
+                props: [
+                  P.str('LastSaved|ApplicationName'), P.str('KString'), P.str(''), P.str(''),
+                  P.str('PIXMYD'),
+                ],
+              },
+            ]),
+          ],
+        },
       ],
     },
+    // FileId, CreationTime and Creator sit between the header and the settings
+    // in every FBX a real tool writes. FileId in particular is the first link
+    // of the chain the footer code ends: leaving it out gives a file whose
+    // footer identifies a document that is not in it.
+    { name: 'FileId', props: [P.raw(fileId(stamped))] },
+    { name: 'CreationTime', props: [P.str(creationTime(stamped))] },
     { name: 'Creator', props: [P.str('PIXMYD')] },
     {
       name: 'GlobalSettings',
@@ -617,9 +740,12 @@ export function writeMeshFbx(mesh: Mesh, options: FbxWriteOptions = {}): Uint8Ar
     },
     objects,
     connections,
+    // An empty take list. There is no animation here, and readers that look for
+    // the section find an answer rather than its absence.
+    { name: 'Takes', children: [{ name: 'Current', props: [P.str('')] }] },
   ];
 
-  return serializeFbx(root, options.date);
+  return serializeFbx(root, options.date, version);
 }
 
 // ---------------------------------------------------------------------------

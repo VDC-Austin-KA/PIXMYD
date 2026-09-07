@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Compression)
+import Compression
+#endif
 import XCTest
 @testable import PIXMYD
 
@@ -153,22 +156,31 @@ enum PngTestReader {
         }
         XCTAssertEqual(offset, data.count, "chunks must exactly fill the file")
 
-        // zlib stream: 0x78 0x01, stored blocks, adler32 trailer.
+        // zlib stream: 0x78 0x01, deflate blocks, adler32 trailer.
         XCTAssertEqual(idat[idat.startIndex], 0x78)
         XCTAssertEqual(idat[idat.startIndex + 1], 0x01)
         var raw = Data()
-        var position = 2
-        while position < idat.count - 4 {
-            let header = idat[idat.startIndex + position]
-            position += 1
-            XCTAssertEqual((header >> 1) & 3, 0, "atlas PNG must use stored blocks")
-            let length = Int(leU16(idat, position))
-            let complement = Int(leU16(idat, position + 2))
-            XCTAssertEqual(complement, 0xFFFF - length, "NLEN must be the ones complement of LEN")
-            position += 4
-            raw.append(contentsOf: idat[(idat.startIndex + position)..<(idat.startIndex + position + length)])
-            position += length
-            if header & 1 == 1 { break }
+        // Stored blocks are one branch; a real deflate stream is the other. The
+        // writer uses the system compressor where there is one, so which of the
+        // two arrives depends on the platform running the test, and a decoder
+        // that only knew about stored blocks would pass on Linux and fail on a
+        // phone for a file that is perfectly valid on both.
+        let firstBlockType = (idat[idat.startIndex + 2] >> 1) & 3
+        if firstBlockType == 0 {
+            var position = 2
+            while position < idat.count - 4 {
+                let header = idat[idat.startIndex + position]
+                position += 1
+                let length = Int(leU16(idat, position))
+                let complement = Int(leU16(idat, position + 2))
+                XCTAssertEqual(complement, 0xFFFF - length, "NLEN must be the ones complement of LEN")
+                position += 4
+                raw.append(contentsOf: idat[(idat.startIndex + position)..<(idat.startIndex + position + length)])
+                position += length
+                if header & 1 == 1 { break }
+            }
+        } else {
+            raw = try inflate(idat, expected: height * (1 + width * 3))
         }
         XCTAssertEqual(beU32(idat, idat.count - 4), adler32([UInt8](raw)))
 
@@ -209,6 +221,34 @@ enum PngTestReader {
             }
         }
         return c ^ 0xFFFF_FFFF
+    }
+
+    /// Inflate a zlib stream, for the compressed branch of `decode`.
+    ///
+    /// This is the one place the independent decoder leans on a system
+    /// facility: writing a Huffman decoder to check a Huffman encoder would be
+    /// a great deal of code to catch a class of bug that the CRC and adler
+    /// checks around it already catch.
+    static func inflate(_ idat: Data, expected: Int) throws -> Data {
+        #if canImport(Compression)
+        // Skip the two-byte zlib header and the four-byte adler trailer: the
+        // system decoder wants the raw DEFLATE body.
+        let body = [UInt8](idat[(idat.startIndex + 2)..<(idat.endIndex - 4)])
+        var out = [UInt8](repeating: 0, count: max(expected, 1))
+        let written = out.withUnsafeMutableBufferPointer { destination -> Int in
+            body.withUnsafeBufferPointer { source -> Int in
+                compression_decode_buffer(
+                    destination.baseAddress!, destination.count,
+                    source.baseAddress!, source.count,
+                    nil, COMPRESSION_ZLIB
+                )
+            }
+        }
+        XCTAssertEqual(written, expected, "inflated size must be the raw scanline size")
+        return Data(out[0..<written])
+        #else
+        throw XCTSkip("no system inflater, and the writer only emits stored blocks here")
+        #endif
     }
 
     static func adler32(_ bytes: [UInt8]) -> UInt32 {

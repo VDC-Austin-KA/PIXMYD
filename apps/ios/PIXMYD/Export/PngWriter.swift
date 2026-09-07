@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Compression)
+import Compression
+#endif
 
 // A minimal PNG encoder.
 //
@@ -8,20 +11,28 @@ import Foundation
 // in `portableSources`, so `swift test` checks the bytes on Linux rather than
 // discovering a malformed chunk on a phone.
 //
-// ## Stored deflate, not compressed
+// ## Deflate where there is one, stored blocks where there is not
 //
 // PNG's IDAT is a zlib stream, and zlib's deflate has a "stored" block type
 // that copies bytes through uncompressed. The file is then a valid PNG that any
 // decoder reads, and the encoder is a hundred lines instead of a Huffman coder.
 //
-// The cost is size, and it is smaller than it looks for this use: the atlas is
-// one texel per triangle of essentially random scan colour, which is close to
-// incompressible anyway. A real deflate would win maybe 10% here and would be
-// the largest and least-tested thing in the export path.
+// That was the whole encoder, and the reasoning held while the atlas was one
+// texel per triangle of essentially random scan colour: close to
+// incompressible, so a real deflate would have won maybe a tenth for the
+// largest and least-tested thing in the export path.
 //
-// If a future caller needs a genuinely compressible image — a mask, a
-// screenshot — this is the wrong encoder for it and that is the point at which
-// to reach for one that compresses.
+// The atlas is photographs now. A 4096-square photographic atlas stored
+// uncompressed is fifty megabytes, and that is what an embedded FBX texture was
+// costing -- a 68 MB scan of which 50 MB was an image that had never met a
+// compressor. Photographs are not noise; they compress several times over.
+//
+// So on Apple platforms this uses the system's own deflate, which is the
+// platform feature for exactly this and adds no dependency. Everywhere else --
+// Linux CI, where these bytes are checked -- it falls back to stored blocks, so
+// the encoder stays portable and the tests keep running. Both produce a valid
+// zlib stream; a decoder cannot tell which path wrote it, and neither can the
+// rest of this file.
 
 enum PngWriter {
     /// PNG colour type 2: 8-bit RGB, no alpha.
@@ -73,12 +84,57 @@ enum PngWriter {
             raw.append(contentsOf: rgb[start ..< start + width * 3])
         }
 
-        appendChunk(&out, type: "IDAT", data: zlibStored(raw))
+        appendChunk(&out, type: "IDAT", data: zlib(raw))
         appendChunk(&out, type: "IEND", data: [])
         return out
     }
 
     // MARK: - zlib
+
+    /// Wrap bytes in a zlib stream, compressed when the platform can.
+    ///
+    /// Falls back to stored blocks when there is no compressor, and also when
+    /// the compressor declines -- it returns zero for output that would not be
+    /// smaller, which is a real answer for an image that genuinely is noise.
+    static func zlib(_ raw: [UInt8]) -> [UInt8] {
+        #if canImport(Compression)
+        if let deflated = deflate(raw) {
+            // zlib framing around the raw DEFLATE the system returns: the same
+            // two header bytes as the stored path, then the checksum.
+            var out: [UInt8] = [0x78, 0x01]
+            out.append(contentsOf: deflated)
+            appendU32(&out, adler32(raw))
+            return out
+        }
+        #endif
+        return zlibStored(raw)
+    }
+
+    #if canImport(Compression)
+    /// Raw DEFLATE via the system compressor, or nil if it declined.
+    ///
+    /// `COMPRESSION_ZLIB` in Apple's framework is the deflate *body* with no
+    /// zlib header or trailer, which is why the caller adds both. Getting that
+    /// backwards produces a stream every decoder rejects two bytes in.
+    private static func deflate(_ raw: [UInt8]) -> [UInt8]? {
+        guard !raw.isEmpty else { return nil }
+        // Room for the pathological case where deflate expands: the encoder
+        // returns 0 rather than overrunning, and then stored blocks are the
+        // honest answer anyway.
+        var destination = [UInt8](repeating: 0, count: raw.count + 4096)
+        let written = destination.withUnsafeMutableBufferPointer { out -> Int in
+            raw.withUnsafeBufferPointer { input -> Int in
+                compression_encode_buffer(
+                    out.baseAddress!, out.count,
+                    input.baseAddress!, input.count,
+                    nil, COMPRESSION_ZLIB
+                )
+            }
+        }
+        guard written > 0 else { return nil }
+        return Array(destination[0..<written])
+    }
+    #endif
 
     /// Wrap bytes in a zlib stream of stored deflate blocks.
     static func zlibStored(_ raw: [UInt8]) -> [UInt8] {
