@@ -543,7 +543,11 @@ final class ProcessingPipeline: ObservableObject {
         // wall behind it into the part; refusing anything past 1.5 m in a room
         // discards most of the room.
         let mode = project.scanMode ?? .room
-        let volume = TsdfVolume(
+        // A `var` so it can be let go of. At fine detail the volume is by far
+        // the largest thing in memory, and it was being held alive through
+        // simplification for no reason but that the point cloud came out of it
+        // afterwards.
+        var volume: TsdfVolume? = TsdfVolume(
             voxelSize: quality.voxelSize,
             minDepth: mode.minDepth,
             maxDepth: mode.maxDepth
@@ -568,7 +572,7 @@ final class ProcessingPipeline: ObservableObject {
                 colorCamera = fullRes
             }
 
-            volume.integrate(
+            volume?.integrate(
                 depth: depth,
                 confidence: confidence,
                 width: depthRef.width,
@@ -605,7 +609,18 @@ final class ProcessingPipeline: ObservableObject {
 
         switch format.kind {
         case .mesh:
-            var mesh = volume.extractSurface()
+            var mesh = volume?.extractSurface()
+                ?? TsdfVolume.Mesh(positions: [], normals: nil, indices: [], colors: nil)
+
+            // The point cloud comes out now, before the cleanup, and the volume
+            // is released. It used to be extracted after simplification, which
+            // meant the whole sparse grid stayed resident through the most
+            // memory-hungry step in the pipeline -- and at 12 mm voxels that is
+            // what ran a fine-detail scan out of memory on the phone. Nothing
+            // between here and there reads it.
+            let cloud = volume?.extractPoints()
+                ?? TsdfVolume.PointCloud(positions: [], colors: nil)
+            volume = nil
             guard !mesh.indices.isEmpty else {
                 throw ProcessingError.emptyResult(
                     "Fusion produced no surface. The capture may be too sparse, or the "
@@ -662,7 +677,6 @@ final class ProcessingPipeline: ObservableObject {
             // Persist the result before it is handed over, so an export or a
             // second look never rebuilds it. Edits made in the review viewer
             // are saved back on top of this.
-            let cloud = volume.extractPoints()
             saveArtifact(
                 mesh: mesh, points: cloud, integrated: integrated,
                 mode: mode, quality: quality, cleanup: cleanup,
@@ -681,7 +695,11 @@ final class ProcessingPipeline: ObservableObject {
             )
 
         case .points, .either:
-            let cloud = volume.extractPoints()
+            // No surface wanted here, so the volume goes straight to points and
+            // is released just the same.
+            let cloud = volume?.extractPoints()
+                ?? TsdfVolume.PointCloud(positions: [], colors: nil)
+            volume = nil
             guard !cloud.positions.isEmpty else {
                 throw ProcessingError.emptyResult("Fusion produced no points.")
             }
