@@ -105,9 +105,28 @@ final class FbxWriterTests: XCTestCase {
         let file = url("mesh.fbx")
         try FbxWriter.writeMesh(positions: positions, normals: nil, colors: nil, indices: [0, 1, 2], to: file)
         let bytes = try Data(contentsOf: file)
-        // Cutting the file in half must be a parse error, not a silent
-        // partial mesh.
-        XCTAssertThrowsError(try FbxWriter.parse(bytes.prefix(bytes.count / 2)))
+        let whole = try FbxWriter.parse(bytes).map(\.name)
+        XCTAssertFalse(whole.isEmpty)
+
+        // Cut at many points rather than one. Where the halfway byte lands is a
+        // fact about the current node layout, not about truncation: this test
+        // used to cut at 50% and started passing for the wrong reason the
+        // moment two sections were added ahead of that point, because the new
+        // midpoint happened to land on a NULL record and the parser stopped
+        // cleanly. What has to hold for *every* prefix is that it never yields
+        // a whole document -- either it throws, or it plainly ran out.
+        let step = max(1, bytes.count / 128)
+        for cut in stride(from: 27, to: bytes.count, by: step) {
+            do {
+                let names = try FbxWriter.parse(bytes.prefix(cut)).map(\.name)
+                XCTAssertNotEqual(
+                    names, whole,
+                    "a \(cut)-byte prefix of a \(bytes.count)-byte file parsed as a complete document"
+                )
+            } catch {
+                // Throwing is the expected outcome, and is what most cuts do.
+            }
+        }
     }
 
     // MARK: - Geometry

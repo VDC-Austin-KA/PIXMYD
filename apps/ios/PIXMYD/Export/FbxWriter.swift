@@ -842,32 +842,49 @@ enum FbxWriter {
         let type = String(decoding: data[data.startIndex + offset..<(data.startIndex + offset + 1)], as: UTF8.self)
         offset += 1
 
+        // Every fixed-width read is bounds-checked before it happens. The
+        // little-endian accessors index `data` directly, so without this a
+        // truncated file is an out-of-bounds trap rather than the
+        // `ParseError.truncated` this reader promises -- and a crash in a test
+        // helper is a worse answer than a thrown error, because it takes the
+        // whole run down instead of one assertion.
+        func need(_ count: Int) throws {
+            guard offset + count <= data.count else { throw ParseError.truncated }
+        }
+
         switch type {
         case "C":
+            try need(1)
             let value = data[data.startIndex + offset] != 0
             offset += 1
             return value
         case "Y":
+            try need(2)
             let value = Int16(bitPattern: leU16(data, offset))
             offset += 2
             return value
         case "I":
+            try need(4)
             let value = Int32(bitPattern: leU32(data, offset))
             offset += 4
             return value
         case "F":
+            try need(4)
             let value = Float(bitPattern: leU32(data, offset))
             offset += 4
             return value
         case "D":
+            try need(8)
             let value = Double(bitPattern: leU64(data, offset))
             offset += 8
             return value
         case "L":
+            try need(8)
             let value = Int64(bitPattern: leU64(data, offset))
             offset += 8
             return value
         case "S", "R":
+            try need(4)
             let length = Int(leU32(data, offset))
             offset += 4
             guard offset + length <= data.count else { throw ParseError.truncated }
@@ -876,6 +893,7 @@ enum FbxWriter {
             if type == "S" { return String(decoding: bytes, as: UTF8.self) }
             return bytes
         default:
+            try need(12)
             let length = Int(leU32(data, offset))
             let encoding = leU32(data, offset + 4)
             let byteLength = Int(leU32(data, offset + 8))
