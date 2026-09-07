@@ -14,7 +14,7 @@ struct ExportSheet: View {
     @StateObject private var processor = ProcessingPipeline()
     // FBX by default. Everything captured here is headed for Navisworks, and
     // FBX is the only mesh format it appends without an extra exporter -- the
-    // return leg already sends capture.fbx for exactly that reason, and an
+    // return leg already sends capture.obj for exactly that reason, and an
     // export sheet that still defaulted to GLB meant the file a user shares by
     // hand needed converting when the one the app sends itself did not.
     // GLB is still one tap away for the viewer and the web page.

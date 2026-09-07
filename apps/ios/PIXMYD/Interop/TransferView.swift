@@ -551,7 +551,7 @@ struct CaptureSendView: View {
             ScrollView {
                 VStack(spacing: Theme.Metrics.gutter) {
                     Panel(title: "Where it goes") {
-                        Text("This writes capture.json, capture.fbx and — when you placed "
+                        Text("This writes capture.json, capture.obj with its material and atlas, and — when you placed "
                            + "points on this scan — points.json, then hands them to the share "
                            + "sheet. Save them somewhere PIXMYD-Nav can open, or scan a "
                            + "transfer code to send them straight to the workstation.")
