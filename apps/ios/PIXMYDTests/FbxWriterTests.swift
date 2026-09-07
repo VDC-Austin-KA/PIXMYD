@@ -70,8 +70,11 @@ final class FbxWriterTests: XCTestCase {
         // every endOffset must land exactly on the next node's first byte.
         XCTAssertEqual(
             nodes.map(\.name),
-            ["FBXHeaderExtension", "Creator", "GlobalSettings", "Documents", "References",
-             "Definitions", "Objects", "Connections"]
+            // The same sections, in the same order, as an FBX written by
+            // Autodesk's own SDK. That list is the spec as far as a black-box
+            // reader is concerned.
+            ["FBXHeaderExtension", "FileId", "CreationTime", "Creator", "GlobalSettings",
+             "Documents", "References", "Definitions", "Objects", "Connections", "Takes"]
         )
 
         // Blender and three.js load a file with none of the following, which is
@@ -83,6 +86,21 @@ final class FbxWriterTests: XCTestCase {
             stamp.children.map(\.name),
             ["Version", "Year", "Month", "Day", "Hour", "Minute", "Second", "Millisecond"]
         )
+
+        XCTAssertEqual(
+            header.children.first { $0.name == "FBXHeaderVersion" }?.props[0] as? Int32, 1004)
+        XCTAssertNotNil(header.children.first { $0.name == "SceneInfo" })
+
+        // FileId is the source id encrypted once with the creation stamp, and
+        // the footer code is that same value two encryptions further on.
+        // Sixteen bytes that are not all zero is the cheap end of asserting
+        // they are one chain.
+        let id = try XCTUnwrap(FbxWriter.findNode(nodes, named: "FileId")?.props[0] as? [UInt8])
+        XCTAssertEqual(id.count, 16)
+        XCTAssertTrue(id.contains { $0 != 0 }, "FileId is not blank")
+        let created = try XCTUnwrap(
+            FbxWriter.findNode(nodes, named: "CreationTime")?.props[0] as? String)
+        XCTAssertEqual(created.count, 23, "YYYY-MM-DD HH:MM:SS:mmm")
 
         let document = try XCTUnwrap(FbxWriter.findNode(nodes, named: "Document"))
         XCTAssertEqual(document.props[1] as? String, "Scene")

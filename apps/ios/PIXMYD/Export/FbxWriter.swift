@@ -235,13 +235,21 @@ enum FbxWriter {
         Int((Double(c.nanosecond ?? 0) / 1_000_000).rounded())
     }
 
-    private static func footerCode(_ date: Date) -> [UInt8] {
+    private static func utcComponents(_ date: Date) -> DateComponents {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!
-        let c = calendar.dateComponents(
+        return calendar.dateComponents(
             [.second, .minute, .hour, .day, .month, .year, .nanosecond], from: date
         )
-        let stamp = String(
+    }
+
+    /// The stamp string the footer encryption is keyed on.
+    ///
+    /// Its field order is not a date format anybody would choose; it is what
+    /// the format does, and the footer is only valid if it matches.
+    private static func footerStamp(_ date: Date) -> [UInt8] {
+        let c = utcComponents(date)
+        return Array(String(
             format: "%02d%02d%02d%02d%02d%04d%02d",
             c.second ?? 0,
             c.month ?? 1,
@@ -250,8 +258,35 @@ enum FbxWriter {
             millisecond(of: c) / 10,
             c.year ?? 2000,
             c.minute ?? 0
+        ).utf8)
+    }
+
+    /// The file's identity, as the format computes it.
+    ///
+    /// `FileId` is the well-known source id encrypted once with the creation
+    /// stamp, and the footer code is that same value carried two encryptions
+    /// further. So emitting it is not decoration: the header, the timestamp and
+    /// the footer are one chain, and a reader that checks a file's identity
+    /// against its footer finds a document that agrees with itself rather than
+    /// one missing its first link.
+    private static func fileId(_ date: Date) -> [UInt8] {
+        var id = footerSourceId
+        encrypt(&id, with: footerStamp(date))
+        return id
+    }
+
+    /// `YYYY-MM-DD HH:MM:SS:mmm`, the spelling the format uses.
+    private static func creationTime(_ date: Date) -> String {
+        let c = utcComponents(date)
+        return String(
+            format: "%04d-%02d-%02d %02d:%02d:%02d:%03d",
+            c.year ?? 2000, c.month ?? 1, c.day ?? 1,
+            c.hour ?? 0, c.minute ?? 0, c.second ?? 0, millisecond(of: c)
         )
-        let stampBytes = Array(stamp.utf8)
+    }
+
+    private static func footerCode(_ date: Date) -> [UInt8] {
+        let stampBytes = footerStamp(date)
         var code = footerSourceId
         encrypt(&code, with: stampBytes)
         encrypt(&code, with: footerKey)
@@ -684,11 +719,48 @@ enum FbxWriter {
         let root: [Node] = [
             Node("FBXHeaderExtension",
                  children: [
-                     Node("FBXHeaderVersion", props: [P.i32(1003)]),
+                     // 1004, and the siblings below, are what an FBX written by
+                     // Autodesk's own SDK carries. A reader that only needs the
+                     // version and the creator does not miss them; one that
+                     // walks the header expecting the whole block can refuse a
+                     // file that is otherwise perfect.
+                     Node("FBXHeaderVersion", props: [P.i32(1004)]),
                      Node("FBXVersion", props: [P.i32(Int32(version))]),
+                     Node("EncryptionType", props: [P.i32(0)]),
                      creationTimeStamp(stamped),
                      Node("Creator", props: [P.str("PIXMYD")]),
+                     Node("SceneInfo",
+                          props: [P.str(objectName("GlobalInfo", className: "SceneInfo")),
+                                  P.str("UserData")],
+                          children: [
+                             Node("Type", props: [P.str("UserData")]),
+                             Node("Version", props: [P.i32(100)]),
+                             Node("Properties70", children: [
+                                Node("P", props: [
+                                    P.str("DocumentUrl"), P.str("KString"), P.str("Url"),
+                                    P.str(""), P.str("\(name).fbx"),
+                                ]),
+                                Node("P", props: [
+                                    P.str("SrcDocumentUrl"), P.str("KString"), P.str("Url"),
+                                    P.str(""), P.str("\(name).fbx"),
+                                ]),
+                                Node("P", props: [
+                                    P.str("Original|ApplicationName"), P.str("KString"),
+                                    P.str(""), P.str(""), P.str("PIXMYD"),
+                                ]),
+                                Node("P", props: [
+                                    P.str("LastSaved|ApplicationName"), P.str("KString"),
+                                    P.str(""), P.str(""), P.str("PIXMYD"),
+                                ]),
+                             ]),
+                          ]),
                  ]),
+            // FileId, CreationTime and Creator sit between the header and the
+            // settings in every FBX a real tool writes. FileId in particular is
+            // the first link of the chain the footer code ends: leaving it out
+            // gives a file whose footer identifies a document not in it.
+            Node("FileId", props: [P.raw(fileId(stamped))]),
+            Node("CreationTime", props: [P.str(creationTime(stamped))]),
             Node("Creator", props: [P.str("PIXMYD")]),
             Node("GlobalSettings",
                  children: [
@@ -739,6 +811,9 @@ enum FbxWriter {
                  ] + objectTypes),
             Node("Objects", children: objectsChildren),
             Node("Connections", children: connections),
+            // An empty take list. There is no animation here, and readers that
+            // look for the section find an answer rather than its absence.
+            Node("Takes", children: [Node("Current", props: [P.str("")])]),
         ]
 
         try serialize(root, date: options.date ?? Date()).write(to: url)

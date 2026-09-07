@@ -162,6 +162,49 @@ function encrypt(dst: Uint8Array, src: Uint8Array): void {
   }
 }
 
+/**
+ * The stamp string the footer encryption is keyed on.
+ *
+ * Its field order is not a date format anybody would choose; it is what the
+ * format does, and the footer is only valid if it matches.
+ */
+function footerStamp(date: Date): Uint8Array {
+  const pad = (n: number, width: number) => String(n).padStart(width, '0');
+  const stamp =
+    pad(date.getSeconds(), 2) +
+    pad(date.getMonth() + 1, 2) +
+    pad(date.getHours(), 2) +
+    pad(date.getDate(), 2) +
+    pad(Math.floor(date.getMilliseconds() / 10), 2) +
+    pad(date.getFullYear(), 4) +
+    pad(date.getMinutes(), 2);
+  return new TextEncoder().encode(stamp);
+}
+
+/**
+ * The file's identity, as the format computes it.
+ *
+ * `FileId` is the well-known source id encrypted once with the creation stamp,
+ * and the footer code is that same value carried two encryptions further. So
+ * emitting it is not decoration: the header, the timestamp and the footer are
+ * one chain, and a reader that checks the file's identity against its footer
+ * finds a file that agrees with itself rather than one missing a link.
+ */
+function fileId(date: Date): Uint8Array {
+  const id = FOOTER_SOURCE_ID.slice();
+  encrypt(id, footerStamp(date));
+  return id;
+}
+
+/** `YYYY-MM-DD HH:MM:SS:mmm`, the spelling the format uses. */
+function creationTime(date: Date): string {
+  const pad = (n: number, width: number) => String(n).padStart(width, '0');
+  return pad(date.getFullYear(), 4) + '-' + pad(date.getMonth() + 1, 2) + '-' +
+    pad(date.getDate(), 2) + ' ' + pad(date.getHours(), 2) + ':' +
+    pad(date.getMinutes(), 2) + ':' + pad(date.getSeconds(), 2) + ':' +
+    pad(date.getMilliseconds(), 3);
+}
+
 function footerCode(date: Date): Uint8Array {
   const pad = (n: number, width: number) => String(n).padStart(width, '0');
   const stamp =
@@ -526,16 +569,66 @@ export function writeMeshFbx(mesh: Mesh, options: FbxWriteOptions = {}): Uint8Ar
     ],
   };
 
+  const stamped = options.date ?? new Date();
   const root: FbxNode[] = [
     {
       name: 'FBXHeaderExtension',
       children: [
-        { name: 'FBXHeaderVersion', props: [P.i32(1003)] },
+        // 1004, and the four siblings below, are what an FBX written by
+        // Autodesk's own SDK carries. A reader that only needs the version and
+        // the creator does not miss them; one that walks the header expecting
+        // the full block can refuse a file that is otherwise perfect.
+        { name: 'FBXHeaderVersion', props: [P.i32(1004)] },
         { name: 'FBXVersion', props: [P.i32(FBX_VERSION)] },
-        creationTimeStamp(options.date ?? new Date()),
+        { name: 'EncryptionType', props: [P.i32(0)] },
+        creationTimeStamp(stamped),
         { name: 'Creator', props: [P.str('PIXMYD')] },
+        {
+          name: 'SceneInfo',
+          props: [P.str(objectName('GlobalInfo', 'SceneInfo')), P.str('UserData')],
+          children: [
+            { name: 'Type', props: [P.str('UserData')] },
+            { name: 'Version', props: [P.i32(100)] },
+            properties70([
+              {
+                name: 'P',
+                props: [
+                  P.str('DocumentUrl'), P.str('KString'), P.str('Url'), P.str(''),
+                  P.str(`${name}.fbx`),
+                ],
+              },
+              {
+                name: 'P',
+                props: [
+                  P.str('SrcDocumentUrl'), P.str('KString'), P.str('Url'), P.str(''),
+                  P.str(`${name}.fbx`),
+                ],
+              },
+              {
+                name: 'P',
+                props: [
+                  P.str('Original|ApplicationName'), P.str('KString'), P.str(''), P.str(''),
+                  P.str('PIXMYD'),
+                ],
+              },
+              {
+                name: 'P',
+                props: [
+                  P.str('LastSaved|ApplicationName'), P.str('KString'), P.str(''), P.str(''),
+                  P.str('PIXMYD'),
+                ],
+              },
+            ]),
+          ],
+        },
       ],
     },
+    // FileId, CreationTime and Creator sit between the header and the settings
+    // in every FBX a real tool writes. FileId in particular is the first link
+    // of the chain the footer code ends: leaving it out gives a file whose
+    // footer identifies a document that is not in it.
+    { name: 'FileId', props: [P.raw(fileId(stamped))] },
+    { name: 'CreationTime', props: [P.str(creationTime(stamped))] },
     { name: 'Creator', props: [P.str('PIXMYD')] },
     {
       name: 'GlobalSettings',
@@ -617,6 +710,9 @@ export function writeMeshFbx(mesh: Mesh, options: FbxWriteOptions = {}): Uint8Ar
     },
     objects,
     connections,
+    // An empty take list. There is no animation here, and readers that look for
+    // the section find an answer rather than its absence.
+    { name: 'Takes', children: [{ name: 'Current', props: [P.str('')] }] },
   ];
 
   return serializeFbx(root, options.date);
