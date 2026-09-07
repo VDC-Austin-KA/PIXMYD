@@ -122,7 +122,109 @@ struct MarkerAlignView: View {
     }
 }
 
+/// Aim and tap to put a mark where nothing was imported.
+///
+/// The same crosshair and the same raycast as `MarkerAlignView`, without the
+/// point: there is no id to find and no reference photo to check against,
+/// because the model has not been consulted yet. The operator picks a feature
+/// they will recognise on screen later — a column corner, a door jamb, an
+/// anchor bolt — and taps. What that feature is called, and where the model
+/// thinks it is, is decided at the workstation.
+struct PlacePointView: View {
+    /// The id the next tap will get, shown so it matches what the list says.
+    let nextId: String
+    /// Called with the tapped position in the AR session's world frame, metres.
+    let onPlace: (SIMD3<Double>) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var aligner = MarkerAligner()
+    @State private var count = 0
+
+    var body: some View {
+        ZStack {
+            if ARWorldTrackingConfiguration.isSupported {
+                MarkerAlignContainer(aligner: aligner)
+                    .ignoresSafeArea()
+            } else {
+                Theme.Palette.background.ignoresSafeArea()
+            }
+
+            crosshair
+            overlay
+        }
+        .background(Theme.Palette.background)
+        .onAppear { aligner.start() }
+        .onDisappear { aligner.stop() }
+    }
+
+    private var crosshair: some View {
+        ZStack {
+            Circle()
+                .strokeBorder(aligner.hasTarget ? Theme.Palette.good : Theme.Palette.textTertiary, lineWidth: 2)
+                .frame(width: 44, height: 44)
+            Circle()
+                .fill(aligner.hasTarget ? Theme.Palette.good : Theme.Palette.textTertiary)
+                .frame(width: 5, height: 5)
+        }
+        .allowsHitTesting(false)
+    }
+
+    private var overlay: some View {
+        VStack {
+            Panel(title: "Place \(currentId)") {
+                Text("Aim at something you will recognise in the model — a column corner, "
+                   + "a door jamb, a bolt — and tap. Place at least three, spread out and "
+                   + "not in a line.")
+                    .font(Theme.Typeface.body)
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(aligner.guidance)
+                    .font(Theme.Typeface.caption)
+                    .foregroundStyle(Theme.Palette.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(Theme.Metrics.gutter)
+
+            Spacer()
+
+            VStack(spacing: Theme.Metrics.gutterTight) {
+                Text(count == 0
+                     ? "Nothing placed in this session yet."
+                     : "\(count) placed in this session.")
+                    .font(Theme.Typeface.caption)
+                    .foregroundStyle(Theme.Palette.textSecondary)
+
+                FieldButton(
+                    title: aligner.hasTarget ? "Place \(currentId) here" : "Aim at a surface",
+                    systemImage: "mappin.and.ellipse",
+                    role: .primary
+                ) {
+                    guard let observed = aligner.currentTarget else { return }
+                    UINotificationFeedbackGenerator().notificationOccurred(.success)
+                    onPlace(SIMD3<Double>(Double(observed.x), Double(observed.y), Double(observed.z)))
+                    count += 1
+                }
+                .disabled(!aligner.hasTarget)
+                .opacity(aligner.hasTarget ? 1 : 0.5)
+
+                FieldButton(title: "Done", systemImage: "checkmark") { dismiss() }
+            }
+            .padding(Theme.Metrics.gutter)
+            .background(.ultraThinMaterial)
+        }
+    }
+
+    /// The id for the tap about to happen: the store's next id, advanced by
+    /// however many have been placed without leaving this screen.
+    private var currentId: String {
+        guard nextId.count > 1, nextId.hasPrefix("P"),
+              let number = Int(nextId.dropFirst()) else { return nextId }
+        return String(format: "P%03d", number + count)
+    }
+}
+
 /// Owns the ARKit session for the alignment screen.
+
 ///
 /// A session of its own rather than the capture session's: alignment happens
 /// before or after a scan, never during one, and sharing would mean the
