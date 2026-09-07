@@ -256,7 +256,13 @@ final class ProcessingPipeline: ObservableObject {
         project: CaptureProject,
         quality: Quality,
         integrated: Int,
-        progress: ((String, Double) -> Void)? = nil
+        // Not `((String, Double) -> Void)?`. An optional closure parameter is
+        // implicitly @escaping, and `CaptureUpload.package` hands its own
+        // non-escaping `onProgress` straight through -- which the compiler
+        // then refuses. Nothing here stores the closure; it is called while
+        // the call is on the stack and never after, so a plain non-escaping
+        // parameter with an empty default is both legal and honest.
+        progress: (String, Double) -> Void = { _, _ in }
     ) throws -> [URL] {
         // Every textured format wants the same atlas, so it is baked once here
         // rather than three times below. Projecting the captured photographs
@@ -372,7 +378,9 @@ final class ProcessingPipeline: ObservableObject {
         mesh: TsdfVolume.Mesh,
         project: CaptureProject,
         quality: Quality,
-        progress: ((String, Double) -> Void)? = nil
+        /// Called with a stage and a fraction while the bake runs. Non-escaping
+        /// for the reason spelled out on `writeMesh`.
+        progress: (String, Double) -> Void = { _, _ in }
     ) throws -> ColorAtlas? {
         func flat() throws -> ColorAtlas? {
             try ColorAtlasBaker.bake(
@@ -448,7 +456,7 @@ final class ProcessingPipeline: ObservableObject {
             baker.consider(view: view, index: index, depth: raster)
 
             if index % 20 == 0 {
-                progress?(
+                progress(
                     "Choosing views", 0.90 + 0.03 * Double(index) / Double(frames.count)
                 )
             }
@@ -472,7 +480,7 @@ final class ProcessingPipeline: ObservableObject {
                 // The texel size is the answer to "will the tag be readable",
                 // so it is said out loud while the work is happening rather
                 // than buried in a summary afterwards.
-                progress?(
+                progress(
                     String(format: "Painting texture at %.1f mm", layout.texelMetres * 1000),
                     0.93 + 0.06 * Double(step) / Double(used.count)
                 )

@@ -241,6 +241,37 @@ function allocateId(): bigint {
   return BigInt(nextId++);
 }
 
+/**
+ * The scene document's id.
+ *
+ * A literal rather than an allocation: `Documents` is written before `Objects`
+ * and taking an id from the shared counter would renumber every object in the
+ * file, which the byte-for-byte reference test in the Swift port pins.
+ */
+const DOCUMENT_ID = 900000n;
+
+/**
+ * The `CreationTimeStamp` block Autodesk's own reader looks for.
+ *
+ * Blender and three.js ignore it and load the file regardless, which is how a
+ * writer can omit it and appear to work everywhere that is easy to test.
+ */
+function creationTimeStamp(date: Date): FbxNode {
+  return {
+    name: 'CreationTimeStamp',
+    children: [
+      { name: 'Version', props: [P.i32(1000)] },
+      { name: 'Year', props: [P.i32(date.getUTCFullYear())] },
+      { name: 'Month', props: [P.i32(date.getUTCMonth() + 1)] },
+      { name: 'Day', props: [P.i32(date.getUTCDate())] },
+      { name: 'Hour', props: [P.i32(date.getUTCHours())] },
+      { name: 'Minute', props: [P.i32(date.getUTCMinutes())] },
+      { name: 'Second', props: [P.i32(date.getUTCSeconds())] },
+      { name: 'Millisecond', props: [P.i32(date.getUTCMilliseconds())] },
+    ],
+  };
+}
+
 function properties70(entries: FbxNode[]): FbxNode {
   return { name: 'Properties70', children: entries };
 }
@@ -501,6 +532,7 @@ export function writeMeshFbx(mesh: Mesh, options: FbxWriteOptions = {}): Uint8Ar
       children: [
         { name: 'FBXHeaderVersion', props: [P.i32(1003)] },
         { name: 'FBXVersion', props: [P.i32(FBX_VERSION)] },
+        creationTimeStamp(options.date ?? new Date()),
         { name: 'Creator', props: [P.str('PIXMYD')] },
       ],
     },
@@ -523,11 +555,49 @@ export function writeMeshFbx(mesh: Mesh, options: FbxWriteOptions = {}): Uint8Ar
         ]),
       ],
     },
+    // Every FBX a real tool writes carries a scene document and a (usually
+    // empty) reference list between the settings and the definitions. Omitting
+    // them costs nothing in the permissive parsers and is one of the ways a
+    // file that opens fine in Blender is refused by Autodesk's own reader.
+    {
+      name: 'Documents',
+      children: [
+        { name: 'Count', props: [P.i32(1)] },
+        {
+          name: 'Document',
+          props: [P.i64(DOCUMENT_ID), P.str('Scene'), P.str('Scene')],
+          children: [
+            properties70([
+              {
+                name: 'P',
+                props: [P.str('SourceObject'), P.str('object'), P.str(''), P.str('')],
+              },
+              {
+                name: 'P',
+                props: [
+                  P.str('ActiveAnimStackName'), P.str('KString'), P.str(''),
+                  P.str(''), P.str(''),
+                ],
+              },
+            ]),
+            { name: 'RootNode', props: [P.i64(0)] },
+          ],
+        },
+      ],
+    },
+    { name: 'References' },
     {
       name: 'Definitions',
       children: [
         { name: 'Version', props: [P.i32(100)] },
-        { name: 'Count', props: [P.i32(3)] },
+        // GlobalSettings counts as an object here, and the total has to include
+        // it: readers size their object table from this number.
+        { name: 'Count', props: [P.i32(4)] },
+        {
+          name: 'ObjectType',
+          props: [P.str('GlobalSettings')],
+          children: [{ name: 'Count', props: [P.i32(1)] }],
+        },
         {
           name: 'ObjectType',
           props: [P.str('Geometry')],

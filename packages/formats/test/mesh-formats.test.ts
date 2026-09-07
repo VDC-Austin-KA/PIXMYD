@@ -283,8 +283,40 @@ test('FBX node offsets are self-consistent end to end', () => {
   const nodes = parseFbx(writeMeshFbx(quad()));
   const names = nodes.map((n) => n.name);
   assert.deepEqual(names, [
-    'FBXHeaderExtension', 'Creator', 'GlobalSettings', 'Definitions', 'Objects', 'Connections',
+    'FBXHeaderExtension', 'Creator', 'GlobalSettings', 'Documents', 'References',
+    'Definitions', 'Objects', 'Connections',
   ]);
+});
+
+test('FBX carries the header block and scene document Autodesk looks for', () => {
+  // Blender and three.js load a file without any of this, which is exactly why
+  // it has to be asserted: the permissive parsers are the ones easy to test
+  // against, and Navisworks is not one of them.
+  const nodes = parseFbx(writeMeshFbx(quad()));
+
+  const header = nodes.find((n) => n.name === 'FBXHeaderExtension');
+  const stamp = header?.children.find((n) => n.name === 'CreationTimeStamp');
+  assert.ok(stamp, 'FBXHeaderExtension carries a CreationTimeStamp');
+  assert.deepEqual(
+    stamp!.children.map((n) => n.name),
+    ['Version', 'Year', 'Month', 'Day', 'Hour', 'Minute', 'Second', 'Millisecond'],
+  );
+
+  const documents = nodes.find((n) => n.name === 'Documents');
+  assert.equal(documents?.children.find((n) => n.name === 'Count')?.props[0], 1);
+  const document = documents?.children.find((n) => n.name === 'Document');
+  assert.ok(document, 'a scene document is declared');
+  assert.equal(document!.props[1], 'Scene');
+  assert.equal(document!.children.find((n) => n.name === 'RootNode')?.props[0], 0n);
+
+  // The count is the object total including GlobalSettings, not the number of
+  // ObjectType entries and not the number of Objects children.
+  const definitions = nodes.find((n) => n.name === 'Definitions');
+  const declared = definitions!.children
+    .filter((n) => n.name === 'ObjectType')
+    .map((n) => n.props[0]);
+  assert.deepEqual(declared, ['GlobalSettings', 'Geometry', 'Model', 'Material']);
+  assert.equal(definitions!.children.find((n) => n.name === 'Count')?.props[0], 4);
 });
 
 test('FBX leaf nodes carry no NULL sentinel, parent nodes do', () => {

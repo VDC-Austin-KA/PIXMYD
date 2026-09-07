@@ -28,8 +28,6 @@ let portableSources = [
     "Geo/Registration.swift",
     "Interop/NavContracts.swift",
     "Interop/LocalPointSet.swift",
-    "Interop/GlbReader.swift",
-    "Interop/ArPlacement.swift",
     "Interop/QrPayload.swift",
     "Interop/NavBundleStore.swift",
     "Interop/CaptureExport.swift",

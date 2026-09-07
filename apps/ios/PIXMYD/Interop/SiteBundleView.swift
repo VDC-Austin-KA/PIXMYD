@@ -19,6 +19,21 @@ struct SiteBundleView: View {
     @State private var uploading = false
     @State private var confirmingDelete = false
     @State private var showingOverlay = false
+    @State private var placing = false
+
+    /// The bundle as the store currently holds it, not as it was when this
+    /// screen was pushed.
+    ///
+    /// Placing a mark rewrites the whole set and reinstalls the folder, so the
+    /// `bundle` this view was handed is one point out of date the moment the
+    /// operator places anything. Reading through the store on every render is
+    /// what makes the new point appear in the list behind the camera sheet.
+    /// Falls back to the value passed in for an AR-only bundle, which has no
+    /// set id to look up and never changes underneath us anyway.
+    private var current: StoredNavBundle {
+        guard let setId = bundle.pointSet?.setId else { return bundle }
+        return site.bundle(setId: setId) ?? bundle
+    }
 
     var body: some View {
         ScrollView {
@@ -44,11 +59,6 @@ struct SiteBundleView: View {
         .background(Theme.Palette.background)
         .navigationTitle(current.displayName)
         .navigationBarTitleDisplayMode(.inline)
-        .fullScreenCover(isPresented: $showingModel) {
-            if let ar = current.arBundle {
-                ArModelView(bundle: current, ar: ar)
-            }
-        }
         .fullScreenCover(isPresented: $placing) {
             PlacePointView(nextId: current.pointSet?.nextLocalPointId ?? "P001") { observed in
                 // The bundle it returns is re-read from the store on the next
@@ -62,7 +72,7 @@ struct SiteBundleView: View {
             }
         }
         .fullScreenCover(isPresented: $showingOverlay) {
-            ArModelView(bundle: bundle)
+            ArModelView(bundle: current)
         }
         .confirmationDialog(
             "Remove \(current.displayName)?",

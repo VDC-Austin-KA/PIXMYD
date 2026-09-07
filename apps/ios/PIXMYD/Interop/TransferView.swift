@@ -404,7 +404,7 @@ struct CaptureSendBody: View {
     // to type-check three times in this app already.
 
     private var unsolvedText: String {
-        if pointSet.isCaptureFrame {
+        if pointSet?.isCaptureFrame == true {
             return "These points were placed on this phone, so there is nothing to solve "
                  + "against yet. The scan travels with its ids and their positions; press "
                  + "Seed phone points in PIXMYD-Nav, click each id on the model, and the fit "
@@ -417,7 +417,7 @@ struct CaptureSendBody: View {
     /// Not a warning for a phone-authored set: nothing is wrong, the solve
     /// simply happens at the other end.
     private var unsolvedTone: Color {
-        pointSet.isCaptureFrame ? Theme.Palette.textSecondary : Theme.Palette.caution
+        pointSet?.isCaptureFrame == true ? Theme.Palette.textSecondary : Theme.Palette.caution
     }
 
     private var scanPicker: some View {

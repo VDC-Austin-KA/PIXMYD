@@ -70,8 +70,35 @@ final class FbxWriterTests: XCTestCase {
         // every endOffset must land exactly on the next node's first byte.
         XCTAssertEqual(
             nodes.map(\.name),
-            ["FBXHeaderExtension", "Creator", "GlobalSettings", "Definitions", "Objects", "Connections"]
+            ["FBXHeaderExtension", "Creator", "GlobalSettings", "Documents", "References",
+             "Definitions", "Objects", "Connections"]
         )
+
+        // Blender and three.js load a file with none of the following, which is
+        // exactly why it is asserted here: the permissive parsers are the ones
+        // that are easy to test against, and Navisworks is not one of them.
+        let header = try XCTUnwrap(FbxWriter.findNode(nodes, named: "FBXHeaderExtension"))
+        let stamp = try XCTUnwrap(header.children.first { $0.name == "CreationTimeStamp" })
+        XCTAssertEqual(
+            stamp.children.map(\.name),
+            ["Version", "Year", "Month", "Day", "Hour", "Minute", "Second", "Millisecond"]
+        )
+
+        let document = try XCTUnwrap(FbxWriter.findNode(nodes, named: "Document"))
+        XCTAssertEqual(document.props[1] as? String, "Scene")
+        XCTAssertEqual(
+            document.children.first { $0.name == "RootNode" }?.props[0] as? Int64, 0)
+
+        // The count is the object total including GlobalSettings — not the
+        // number of ObjectType entries, and not the number of Objects children.
+        let definitions = try XCTUnwrap(FbxWriter.findNode(nodes, named: "Definitions"))
+        XCTAssertEqual(
+            definitions.children.filter { $0.name == "ObjectType" }
+                .compactMap { $0.props.first as? String },
+            ["GlobalSettings", "Geometry", "Model", "Material"]
+        )
+        XCTAssertEqual(
+            definitions.children.first { $0.name == "Count" }?.props[0] as? Int32, 4)
     }
 
     func testParseRejectsTruncatedData() throws {
@@ -228,10 +255,32 @@ final class FbxWriterTests: XCTestCase {
         XCTAssertEqual(propertyLinks.count, 1)
         XCTAssertEqual(propertyLinks.first?.props.last as? String, "DiffuseColor")
 
-        // Definitions must declare the two extra object types it contains.
+        // Direction, not just presence. An FBX connection reads
+        // (source, destination) with the source as the child, so the image
+        // feeds the texture and the texture feeds the material. Written the
+        // other way round the file still parses everywhere and simply arrives
+        // untextured, which is exactly how this shipped.
+        let videoId = try XCTUnwrap(
+            FbxWriter.findNode(nodes, named: "Video")?.props[0] as? Int64)
+        let textureId = try XCTUnwrap(texture.props[0] as? Int64)
+        let materialId = try XCTUnwrap(
+            FbxWriter.findNode(nodes, named: "Material")?.props[0] as? Int64)
+
+        let videoLink = try XCTUnwrap(connections.first {
+            $0.props.first as? String == "OO" && $0.props[1] as? Int64 == videoId
+        })
+        XCTAssertEqual(
+            videoLink.props[2] as? Int64, textureId,
+            "the Video is the source and the Texture the destination"
+        )
+        XCTAssertEqual(propertyLinks.first?.props[1] as? Int64, textureId)
+        XCTAssertEqual(propertyLinks.first?.props[2] as? Int64, materialId)
+
+        // Definitions must declare the two extra object types it contains, on
+        // top of the four a plain mesh already has.
         let definitions = try XCTUnwrap(FbxWriter.findNode(nodes, named: "Definitions"))
         let counts = definitions.children.filter { $0.name == "Count" }.compactMap { $0.props.first as? Int32 }
-        XCTAssertEqual(counts.first, 5)
+        XCTAssertEqual(counts.first, 6)
     }
 
     func testUntexturedMeshHasNoTextureNodes() throws {
