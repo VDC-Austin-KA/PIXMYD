@@ -105,27 +105,40 @@ final class FbxWriterTests: XCTestCase {
         let file = url("mesh.fbx")
         try FbxWriter.writeMesh(positions: positions, normals: nil, colors: nil, indices: [0, 1, 2], to: file)
         let bytes = try Data(contentsOf: file)
-        let whole = try FbxWriter.parse(bytes).map(\.name)
-        XCTAssertFalse(whole.isEmpty)
 
-        // Cut at many points rather than one. Where the halfway byte lands is a
-        // fact about the current node layout, not about truncation: this test
-        // used to cut at 50% and started passing for the wrong reason the
-        // moment two sections were added ahead of that point, because the new
-        // midpoint happened to land on a NULL record and the parser stopped
-        // cleanly. What has to hold for *every* prefix is that it never yields
-        // a whole document -- either it throws, or it plainly ran out.
+        let whole = try FbxWriter.parse(bytes)
+        let wholeNames = whole.map(\.name)
+        let wholeVertices = try XCTUnwrap(
+            FbxWriter.findNode(whole, named: "Vertices")?.props[0] as? [Double])
+
+        // Cut at many points rather than one. Where the halfway byte falls is a
+        // fact about the node layout, not about truncation, so a test that cuts
+        // once starts passing — or failing — for the wrong reason the moment a
+        // section is added.
+        //
+        // The invariant is not "every prefix throws". A cut inside the trailing
+        // footer leaves the node list complete, and a walk that terminates at
+        // its own NULL record cannot see past it to know bytes are missing;
+        // that is the format, not a defect. What must never happen is a prefix
+        // that parses into a document presenting as whole while missing part of
+        // the mesh. So: parse, or be complete.
         let step = max(1, bytes.count / 128)
         for cut in stride(from: 27, to: bytes.count, by: step) {
+            let nodes: [FbxWriter.ParsedNode]
             do {
-                let names = try FbxWriter.parse(bytes.prefix(cut)).map(\.name)
-                XCTAssertNotEqual(
-                    names, whole,
-                    "a \(cut)-byte prefix of a \(bytes.count)-byte file parsed as a complete document"
-                )
+                nodes = try FbxWriter.parse(bytes.prefix(cut))
             } catch {
-                // Throwing is the expected outcome, and is what most cuts do.
+                continue    // the expected outcome, and what most cuts do
             }
+            XCTAssertEqual(
+                nodes.map(\.name), wholeNames,
+                "a \(cut)-byte prefix of \(bytes.count) parsed into a partial document"
+            )
+            XCTAssertEqual(
+                FbxWriter.findNode(nodes, named: "Vertices")?.props[0] as? [Double],
+                wholeVertices,
+                "a \(cut)-byte prefix parsed but its mesh is not the whole mesh"
+            )
         }
     }
 
