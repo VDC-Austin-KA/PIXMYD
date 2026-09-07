@@ -241,16 +241,27 @@ struct CaptureExportRequest {
 /// The filenames the return leg uses, in one place so the writer and the
 /// packager cannot drift.
 enum CaptureUploadNames {
-    /// FBX, not GLB.
+    /// OBJ, not FBX.
     ///
-    /// Appending a file is the only way a Navisworks plugin can put geometry
-    /// into an open document, and FBX is a format Navisworks reads with no
-    /// extra exporter installed. GLB is not — the scan would arrive as a file
-    /// the workstation could see and not open, which is the worst of both.
-    /// This app's FBX writer is the one the monorepo tests feed through
-    /// three.js's own FBXLoader, so it is checked against a parser that is not
-    /// ours.
-    static let geometry = "capture.fbx"
+    /// The plugin turns this into an NWC on arrival, and appends that. NWC is
+    /// the format Navisworks writes for its own cache, so appending one is a
+    /// load rather than a translation — the one reader that is never the weak
+    /// link. FBX has to survive a reader nobody here controls, and on the
+    /// machine this suite is used on it did not: a four-kilobyte single
+    /// triangle came back "the contents are corrupt" exactly like a
+    /// sixty-eight megabyte scan.
+    ///
+    /// OBJ is what carries it there because the plugin can *read* it — it
+    /// could never read FBX, which is why geometry used to be handed straight
+    /// to Navisworks — and because it carries a texture coordinate per polygon
+    /// corner, which is what the photographic atlas needs and what the NWC
+    /// geometry stream takes.
+    ///
+    /// Three files, not one: OBJ has no single-file form that carries a
+    /// texture. The material and the atlas travel beside it.
+    static let geometry = "capture.obj"
+    static let material = "capture.mtl"
+    static let texture = "capture.png"
     static let capture = "capture.json"
     static let fieldPoints = FieldPointSet.fileName
 }

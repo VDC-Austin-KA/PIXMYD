@@ -86,7 +86,6 @@ enum CaptureUpload {
         // Bake only when the model frame is actually known here.
         let bakeable = pointSet != nil ? solved : nil
         let frame: CaptureGeometryFrame = bakeable == nil ? .capture : .model
-        let modelUpAxis = pointSet?.provenance.upAxis ?? "Y"
 
         onProgress(frame == .model ? "Placing the mesh…" : "Preparing the mesh…")
 
@@ -114,28 +113,32 @@ enum CaptureUpload {
 
         onProgress("Writing \(geometryFileName)…")
 
-        // FBX declares Y as its up axis, so geometry that is Z-up in its own
-        // frame has to be turned on the way out or it arrives on its side.
-        // Baked geometry is in the model's frame (Z-up for every Navisworks
-        // document this suite has met); unbaked geometry is ARKit's, which is
-        // already Y-up.
-        let zUp = frame == .model && modelUpAxis.uppercased().hasPrefix("Z")
+        // No up-axis turn, unlike the FBX this replaced. FBX declares Y as
+        // its up axis, so a reader turns the geometry on the way in and the
+        // writer had to pre-compensate. OBJ declares nothing: the coordinates
+        // are the ones written, the plugin converts them to NWC unturned, and
+        // the transform it applies is the solution as solved. One less frame
+        // to get wrong, and the plugin asserts the same thing from its side.
 
-        let scratch = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-            .appendingPathComponent("capture-\(UUID().uuidString).fbx")
-        defer { try? FileManager.default.removeItem(at: scratch) }
+        let scratchDirectory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("capture-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: scratchDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: scratchDirectory) }
 
-        try Exporters.writeFbx(
+        // The stem fixes what the sidecars are called, and the plugin looks for
+        // those exact names.
+        let objURL = scratchDirectory.appendingPathComponent(CaptureUploadNames.geometry)
+        let writtenURLs = try Exporters.writeObj(
             positions: positions,
             normals: normals,
             colors: mesh.colors,
             indices: mesh.indices,
-            polygonUvs: atlas.map { ColorAtlasBaker.polygonUvs(of: $0, for: mesh.indices) },
-            texture: atlas?.texture,
-            options: FbxWriter.WriteOptions(name: project.name, units: .cm, zUpToYUp: zUp),
-            to: scratch
+            atlas: atlas,
+            materialName: objURL.deletingPathExtension().lastPathComponent,
+            to: objURL
         )
-        let geometry = try Data(contentsOf: scratch)
+        let geometry = try Data(contentsOf: objURL)
 
         let request = CaptureExportRequest(
             captureId: project.id,
@@ -153,6 +156,15 @@ enum CaptureUpload {
             CaptureUploadNames.capture: Data(CaptureExport.render(request, solved: solved).utf8),
             geometryFileName: geometry,
         ]
+
+        // The material and the atlas, when there is one. OBJ has no single-file
+        // form that carries a texture, so all three travel or the scan arrives
+        // untextured — which is the whole point of the photographic bake.
+        for url in writtenURLs where url != objURL {
+            if let bytes = try? Data(contentsOf: url) {
+                files[url.lastPathComponent] = bytes
+            }
+        }
 
         // The points placed on this phone travel as their own contract file, in
         // the same shape PIXMYD-Nav writes and reads. A second schema for the

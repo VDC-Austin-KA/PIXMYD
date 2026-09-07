@@ -612,10 +612,10 @@ final class NavInteropTests: XCTestCase {
         XCTAssertEqual(provenance["navex:targetUnits"] as? String, "Meters")
 
         let geometry = try XCTUnwrap(root["geometry"] as? [String: Any])
-        // FBX, not GLB: appending a file is the only way a Navisworks plugin
-        // can put geometry into an open document, and Navisworks does not read
-        // GLB. See CaptureUpload.
-        XCTAssertEqual(geometry["file"] as? String, "capture.fbx")
+        // OBJ, not FBX: the plugin turns it into an NWC on arrival and appends
+        // that, because NWC is the format Navisworks writes for its own cache
+        // and OBJ is the one this plugin can read. See CaptureUpload.
+        XCTAssertEqual(geometry["file"] as? String, "capture.obj")
         XCTAssertEqual(geometry["bytes"] as? Int, 12_882_110)
         // Which frame the mesh is in. Absent, a consumer assumes `capture`,
         // which is what every file written before this field existed contained.
