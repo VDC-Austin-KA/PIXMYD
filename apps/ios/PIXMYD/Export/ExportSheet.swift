@@ -8,6 +8,13 @@ import UniformTypeIdentifiers
 /// long it is likely to take. Nothing is uploaded anywhere.
 struct ExportSheet: View {
     let project: CaptureProject
+    /// Rebuild from the raw frames rather than reusing the saved result.
+    ///
+    /// The saved result is a mesh, not a file, so exporting a second format
+    /// from it is the normal path and does not need this. What needs it is
+    /// disagreeing with the geometry itself — a different detail level, or a
+    /// fusion the user has decided is wrong.
+    var reprocess: Bool = false
 
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var store: ProjectStore
@@ -389,7 +396,8 @@ struct ExportSheet: View {
             cleanup: cleanup,
             // Only meshes can be reviewed — the viewer renders triangles, and a
             // point cloud has none.
-            reviewFirst: reviewFirst && format.kind == .mesh
+            reviewFirst: reviewFirst && format.kind == .mesh,
+            reprocess: reprocess
         )
     }
 }
