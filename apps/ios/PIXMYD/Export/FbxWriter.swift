@@ -316,6 +316,36 @@ enum FbxWriter {
         enum Units { case cm, m }
     }
 
+    /// The scene document's id.
+    ///
+    /// A literal rather than an allocation: `Documents` is written before
+    /// `Objects` and taking an id from the shared counter would renumber every
+    /// object in the file, which the byte-for-byte reference test pins.
+    private static let documentId: Int64 = 900_000
+
+    /// The `CreationTimeStamp` block Autodesk's own reader looks for.
+    ///
+    /// Blender and three.js ignore it and load the file regardless, which is
+    /// how a writer can omit it and appear to work everywhere that is easy to
+    /// test against.
+    private static func creationTimeStamp(_ date: Date) -> Node {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let c = calendar.dateComponents(
+            [.year, .month, .day, .hour, .minute, .second, .nanosecond], from: date
+        )
+        return Node("CreationTimeStamp", children: [
+            Node("Version", props: [P.i32(1000)]),
+            Node("Year", props: [P.i32(Int32(c.year ?? 2000))]),
+            Node("Month", props: [P.i32(Int32(c.month ?? 1))]),
+            Node("Day", props: [P.i32(Int32(c.day ?? 1))]),
+            Node("Hour", props: [P.i32(Int32(c.hour ?? 0))]),
+            Node("Minute", props: [P.i32(Int32(c.minute ?? 0))]),
+            Node("Second", props: [P.i32(Int32(c.second ?? 0))]),
+            Node("Millisecond", props: [P.i32(Int32(millisecond(of: c)))]),
+        ])
+    }
+
     private static func propInt(name: String, _ value: Int32) -> Node {
         Node("P",
              props: [P.str(name), P.str("int"), P.str("Integer"), P.str(""), P.i32(value)])
@@ -577,8 +607,12 @@ enum FbxWriter {
             Node("C", props: [P.str("OO"), P.i64(materialId), P.i64(modelId)]),
         ]
 
-        var definitionCount: Int32 = 3
+        // GlobalSettings counts as an object here, and the total has to
+        // include it: readers size their object table from this number.
+        var definitionCount: Int32 = 4
         var objectTypes: [Node] = [
+            Node("ObjectType", props: [P.str("GlobalSettings")],
+                 children: [Node("Count", props: [P.i32(1)])]),
             Node("ObjectType", props: [P.str("Geometry")],
                  children: [Node("Count", props: [P.i32(1)])]),
             Node("ObjectType", props: [P.str("Model")],
@@ -629,23 +663,30 @@ enum FbxWriter {
                     Node("Cropping", props: [P.i32(0), P.i32(0), P.i32(0), P.i32(0)]),
                 ]
             ))
-            connections.append(Node("C", props: [P.str("OO"), P.i64(textureId), P.i64(videoId)]))
+            // Video into Texture, not the other way round. An FBX connection
+            // reads (source, destination) and the source is the child, so the
+            // image feeds the texture. Inverted, every importer parses the file
+            // happily and simply never associates the two -- which is a mesh
+            // that arrives untextured with nothing anywhere reporting why.
+            connections.append(Node("C", props: [P.str("OO"), P.i64(videoId), P.i64(textureId)]))
             connections.append(Node(
                 "C",
                 props: [P.str("OP"), P.i64(textureId), P.i64(materialId), P.str("DiffuseColor")]
             ))
-            definitionCount = 5
+            definitionCount = 6
             objectTypes.append(Node("ObjectType", props: [P.str("Video")],
                                     children: [Node("Count", props: [P.i32(1)])]))
             objectTypes.append(Node("ObjectType", props: [P.str("Texture")],
                                     children: [Node("Count", props: [P.i32(1)])]))
         }
 
+        let stamped = options.date ?? Date()
         let root: [Node] = [
             Node("FBXHeaderExtension",
                  children: [
                      Node("FBXHeaderVersion", props: [P.i32(1003)]),
                      Node("FBXVersion", props: [P.i32(Int32(version))]),
+                     creationTimeStamp(stamped),
                      Node("Creator", props: [P.str("PIXMYD")]),
                  ]),
             Node("Creator", props: [P.str("PIXMYD")]),
@@ -666,6 +707,31 @@ enum FbxWriter {
                              propDouble(name: "OriginalUnitScaleFactor", scale == 100 ? 1 : 100),
                           ]),
                  ]),
+            // Every FBX a real tool writes carries a scene document and a
+            // (usually empty) reference list between the settings and the
+            // definitions. Omitting them costs nothing in the permissive
+            // parsers and is one of the ways a file that opens fine in Blender
+            // is refused by Autodesk's own reader.
+            Node("Documents",
+                 children: [
+                     Node("Count", props: [P.i32(1)]),
+                     Node("Document",
+                          props: [P.i64(documentId), P.str("Scene"), P.str("Scene")],
+                          children: [
+                             Node("Properties70", children: [
+                                Node("P", props: [
+                                    P.str("SourceObject"), P.str("object"),
+                                    P.str(""), P.str(""),
+                                ]),
+                                Node("P", props: [
+                                    P.str("ActiveAnimStackName"), P.str("KString"),
+                                    P.str(""), P.str(""), P.str(""),
+                                ]),
+                             ]),
+                             Node("RootNode", props: [P.i64(0)]),
+                          ]),
+                 ]),
+            Node("References"),
             Node("Definitions",
                  children: [
                      Node("Version", props: [P.i32(100)]),
