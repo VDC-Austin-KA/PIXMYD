@@ -218,7 +218,7 @@ final class SiteStore: ObservableObject {
     /// sending a scan back — then works on it without knowing it was authored
     /// here rather than imported.
     private func installLocal(_ set: NavPointSet) throws -> StoredNavBundle {
-        try install(files: [CaptureUpload.pointsFileName: try set.renderJson()])
+        try install(files: [NavBundleStore.pointsFileName: try set.renderJson()])
     }
 
     nonisolated private static func timestamp() -> String {

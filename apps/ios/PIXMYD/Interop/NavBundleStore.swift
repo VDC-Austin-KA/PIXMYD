@@ -72,6 +72,13 @@ struct ResolvedNavPoint: Equatable {
 
 enum NavBundleStore {
     static let directoryName = "NavBundles"
+    /// The contract file a bundle's points live in.
+    ///
+    /// Named here because this is what reads it. `SiteStore` writes a set the
+    /// phone authored itself back through `install`, and a locally authored
+    /// set that lands under any other name is a bundle this store then reports
+    /// as holding no points at all.
+    static let pointsFileName = "points.json"
 
     /// The store's root, created on demand.
     static func root(in documents: URL) -> URL {
@@ -118,7 +125,7 @@ enum NavBundleStore {
         let fm = FileManager.default
 
         var pointSet: NavPointSet?
-        let pointsURL = directory.appendingPathComponent("points.json")
+        let pointsURL = directory.appendingPathComponent(pointsFileName)
         if fm.fileExists(atPath: pointsURL.path) {
             pointSet = try NavPointSet.decode(try Data(contentsOf: pointsURL))
         }
