@@ -46,7 +46,15 @@ struct ColorAtlas {
     /// The encoded image, ready to be written beside the mesh or embedded.
     var texture: TsdfVolume.TextureImage
     /// One texture coordinate per triangle, at that triangle's texel centre.
+    ///
+    /// When `cornerUvs` is present this is that tile's first corner rather
+    /// than a centre, and anything wanting the real coordinates should read
+    /// `cornerUvs` instead.
     var triangleUvs: [SIMD2<Float>]
+    /// Three per triangle, when the atlas gives each triangle a whole tile
+    /// rather than a single texel. Nil for the flat per-triangle bake, whose
+    /// three corners genuinely do share one coordinate.
+    var cornerUvs: [SIMD2<Float>]? = nil
     /// The atlas is square; this is its side in texels.
     var side: Int
 
@@ -67,7 +75,12 @@ enum ColorAtlasBaker {
     ///
     /// The atlas hands one UV per triangle and all three corners of a triangle
     /// sample the same texel, so each corner repeats its triangle's UV.
+    /// A photo-textured atlas already has one per corner, and they differ —
+    /// that is the whole point of it — so those are handed straight back.
     static func polygonUvs(of atlas: ColorAtlas, for indices: [UInt32]) -> [SIMD2<Float>] {
+        if let corners = atlas.cornerUvs, corners.count >= indices.count {
+            return Array(corners.prefix(indices.count))
+        }
         var out = [SIMD2<Float>]()
         out.reserveCapacity(indices.count)
         for triangle in 0..<(indices.count / 3) {

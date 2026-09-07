@@ -48,8 +48,8 @@ is parsed back by three.js's loaders in the test suite.
 ## What works today
 
 Everything listed here is implemented and covered by the test suite
-(`npm test`, 292 tests, no network access required — plus 35 Swift tests for the
-iOS app's arithmetic, `swift test` in `apps/ios`).
+(`npm test`, 298 tests, no network access required — plus 247 Swift tests for
+the iOS app's arithmetic, `swift test` in `apps/ios`).
 
 ### Export formats — `packages/formats`
 
@@ -110,6 +110,15 @@ There is a test for exactly that case.
   panorama share one reconstruction path.
 - **TSDF fusion**: sparse-block Curless & Levoy volumetric integration from
   depth frames and poses, with confidence gating and colour.
+- **Photographic texturing**: the mesh is textured by projecting the captured
+  frames back onto it, not by baking the colour fusion left on its vertices.
+  Every triangle gets its own atlas tile sized from how big it is in the world,
+  so texel density is roughly constant in millimetres across the model, and each
+  tile is filled from the single frame that saw that triangle most head-on,
+  closest and unoccluded. Fusion averages colour into 25 mm voxels, which loses
+  a 3 mm letter stroke twice over; a 12-megapixel frame at half a metre resolves
+  about 0.15 mm of wall. That is the difference between a scan that carries a
+  wall's colour and one you can read the valve tag off.
 - **Surface extraction**: marching tetrahedra — 16 unambiguous sign cases per
   tetrahedron rather than 256 cases with genuinely ambiguous configurations, so
   the surface is manifold by construction. Unobserved voxels return *null*
@@ -147,7 +156,7 @@ tabs — Capture, Projects, Site, Survey, Account.
 
 **Partly compiled.** The arithmetic — bundle schema, TSDF fusion, meshing,
 format writers, NMEA parsing — builds and tests on Linux via
-[`apps/ios/Package.swift`](apps/ios/Package.swift), 35 tests, run in CI. The
+[`apps/ios/Package.swift`](apps/ios/Package.swift), 247 tests, run in CI. The
 SwiftUI, ARKit, CoreLocation and Metal half has only been parsed;
 [Codemagic](codemagic.yaml) compiles it and produces an unsigned `.ipa` a free
 Apple ID can sideload. See [`apps/ios/README.md`](apps/ios/README.md) for the
@@ -156,6 +165,61 @@ install route and an honest list of what would bite first.
 This app exists because iPhone LiDAR is not reachable from a web page — not
 through WebXR, not `getUserMedia`, not anything in flight. Everything else in
 PIXMYD is deliberately a web toolchain.
+
+### Navisworks round trip — `apps/ios/PIXMYD/Interop`
+
+The other half lives in [PIXMYD-Nav](https://github.com/VDC-Austin-KA/PIXMYD-Nav),
+a Navisworks add-in. Between them a scan goes onto a model and a model goes onto
+a site, and the coordinates survive the journey both ways.
+
+**Points can start at either end.** The workstation places control points on the
+model and prints QR markers for them; or a crew walks the space first, places
+points on the phone while scanning, and the workstation puts the same ids on the
+model afterwards. The second is the case that used to stop people — it is the
+normal one on a first visit, and the ids are what tie the two lists together.
+
+**Two points are enough.** Both frames know which way down is: ARKit runs
+gravity-aligned and a Navisworks model states its up axis. Holding the vertical
+removes roll and pitch and leaves heading and translation, which two points
+over-determine. `solveGravityConstrained` is a closed form, it agrees with
+Horn's solve on clean control, and it *reports* a blunder that Horn's absorbs
+into a tilt. Two points also leave no redundancy — the RMS is near zero whether
+they were right or wrong — and both apps say so beside the number rather than
+letting it reassure anybody.
+
+**The mesh goes back as FBX.** A Navisworks add-in cannot author geometry into
+an open document; it can append a file. Navisworks reads FBX and does not read
+GLB, so `capture.fbx` is what travels, written by the same writer the monorepo
+tests feed through three.js's own FBXLoader. When the phone knows the model
+frame it bakes the alignment into the vertices and says so in
+`geometry.frame`; when it does not, the workstation transforms the appended
+model itself.
+
+**Transfer is over the local network, and the bar moves.** One QR code on the
+workstation screen, scanned on the phone, opens a session that offers a folder
+and accepts a scan. Progress is reported in bytes rather than files completed,
+because the return leg is a JSON of a few kilobytes and a mesh three orders of
+magnitude larger.
+
+**And the model comes the other way.** The add-in tessellates the document into
+`ar-model.glb`; `GlbReader` reads back the subset both writers in this suite
+produce and refuses the rest rather than drawing a model that is subtly in the
+wrong place.
+
+There are two ways to anchor it and the screen never lets them be confused.
+The **survey fit** solves from three or more located markers, is measurable,
+and keeps the RMS that placed it on screen the whole time. **By hand** anchors
+on whatever points the bundle carries, from one, and lets the operator correct
+it by eye afterwards — drag to slide, twist to turn, arrows for height, and any
+anchor can be replaced or cleared with the placement re-solving as it happens.
+
+The hand path exists because an overlay floating at arm's length looks exactly
+like an aligned one through a phone screen, and refusing to draw one was the
+wrong answer to that: most of the time nobody has walked the site with a marker
+pack, and the real question is whether those ducts clash with that beam. So the
+overlay is drawn, and it is labelled NOT MEASURABLE in the same place the survey
+fit shows its RMS. There is no reassuring number to be had from it, because it
+does not have one.
 
 ### Studio web app — `apps/studio`
 

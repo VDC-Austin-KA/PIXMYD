@@ -35,6 +35,9 @@ struct CaptureView: View {
     @State private var pendingProject: CaptureProject?
     @State private var errorMessage: String?
     @State private var projectName = ""
+    /// The id of the last point placed, shown for a beat under the shutter so
+    /// the operator can look up from the phone knowing it took.
+    @State private var lastPlacedPoint: String?
 
     var body: some View {
         ZStack {
@@ -47,6 +50,14 @@ struct CaptureView: View {
                         .ignoresSafeArea()
                         .allowsHitTesting(false)
                         .transition(.opacity)
+                }
+
+                if controller.isPlacingPoints {
+                    FieldPointCrosshair(
+                        hasTarget: controller.canPlacePoint,
+                        source: controller.pointTargetSource,
+                        range: controller.pointTargetRange
+                    )
                 }
 
                 overlay
@@ -113,7 +124,16 @@ struct CaptureView: View {
         VStack(spacing: 0) {
             topBar
             Spacer()
-            if controller.isRecording { coverageBar }
+            if controller.isPlacingPoints {
+                FieldPointPanel(
+                    set: controller.fieldPoints,
+                    onRemove: { controller.removePoint(id: $0) },
+                    onDone: { withAnimation { controller.endPlacingPoints() } }
+                )
+                .padding(.bottom, Theme.Metrics.gutterTight)
+            } else if controller.isRecording {
+                coverageBar
+            }
             bottomBar
         }
         .padding(.horizontal, Theme.Metrics.gutter)
@@ -132,6 +152,8 @@ struct CaptureView: View {
             Spacer()
 
             trackingBadge
+
+            pointsButton
 
             meshButton
 
@@ -193,6 +215,46 @@ struct CaptureView: View {
     private var receiverButtonTitle: String {
         guard let receiver = gnss.connectedReceiver else { return "Scan for RTK" }
         return receiver.displayName
+    }
+
+    /// Places control points while the space is being scanned.
+    ///
+    /// On the capture screen rather than behind a menu, and rather than on a
+    /// screen of its own, because a field point is an ARKit world coordinate
+    /// and ARKit's world origin is wherever *this* session started. Placed
+    /// anywhere else it belongs to a different room's arithmetic. Putting it
+    /// two taps away would have been the same as not having it: nobody hunts a
+    /// menu for a capability they do not know exists, and the moment to use it
+    /// is while standing in front of the corner.
+    private var pointsButton: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                controller.isPlacingPoints
+                    ? controller.endPlacingPoints()
+                    : controller.beginPlacingPoints()
+            }
+        } label: {
+            ZStack(alignment: .topTrailing) {
+                Image(systemName: controller.isPlacingPoints ? "scope" : "mappin.and.ellipse")
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(width: Theme.Metrics.minimumTapTarget,
+                           height: Theme.Metrics.minimumTapTarget)
+                    .foregroundStyle(controller.isPlacingPoints
+                                     ? Theme.Palette.accent : Theme.Palette.text)
+                    .background(.black.opacity(0.55), in: Circle())
+
+                if !controller.fieldPoints.isEmpty {
+                    Text("\(controller.fieldPoints.points.count)")
+                        .font(Theme.Typeface.label(11, weight: .bold))
+                        .foregroundStyle(.black)
+                        .padding(4)
+                        .background(Theme.Palette.good, in: Circle())
+                }
+            }
+        }
+        .accessibilityLabel(controller.isPlacingPoints
+                            ? "Stop placing points. \(controller.fieldPoints.points.count) placed."
+                            : "Place control points")
     }
 
     /// Cycles the live mesh: coverage wireframe, surface colours, off.
@@ -311,7 +373,58 @@ struct CaptureView: View {
         }
     }
 
+    @ViewBuilder
     private var shutter: some View {
+        if controller.isPlacingPoints {
+            placePointButton
+        } else {
+            recordShutter
+        }
+    }
+
+    /// The shutter, while points are being placed.
+    ///
+    /// The same button in the same place doing the obvious thing for the mode
+    /// it is in. Recording carries on underneath — placing a point is not a
+    /// reason to stop scanning, and stopping to place one is how a scan ends up
+    /// with a hole where the operator was standing still.
+    private var placePointButton: some View {
+        VStack(spacing: 6) {
+            Button {
+                guard let placed = controller.placePoint() else { return }
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                lastPlacedPoint = placed.id
+            } label: {
+                ZStack {
+                    Circle()
+                        .strokeBorder(.white.opacity(0.9), lineWidth: 4)
+                        .frame(width: Theme.Metrics.shutterDiameter + 10,
+                               height: Theme.Metrics.shutterDiameter + 10)
+                    Circle()
+                        .fill(controller.canPlacePoint ? Theme.Palette.accent : Theme.Palette.surfaceRaised)
+                        .frame(width: Theme.Metrics.shutterDiameter,
+                               height: Theme.Metrics.shutterDiameter)
+                    Image(systemName: "mappin")
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+            }
+            .disabled(!controller.canPlacePoint)
+            .opacity(controller.canPlacePoint ? 1 : 0.45)
+            .accessibilityLabel("Place a point here")
+
+            if let lastPlacedPoint {
+                Text("Placed \(lastPlacedPoint)")
+                    .font(Theme.Typeface.caption)
+                    .foregroundStyle(Theme.Palette.good)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(.black.opacity(0.6), in: Capsule())
+            }
+        }
+    }
+
+    private var recordShutter: some View {
         VStack(spacing: 6) {
             if controller.isRecording {
                 HStack(spacing: 12) {

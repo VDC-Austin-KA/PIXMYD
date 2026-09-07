@@ -166,10 +166,10 @@ struct NavProvenance: Codable, Equatable {
     var isMetric: Bool {
         let u = targetUnits.lowercased()
         // Empty counts as metres. The contract fixes target units at metres, so
-        // a file that declares nothing is declaring the only legal value — and
+        // a file that declares nothing is declaring the only legal value -- and
         // PIXMYD-Nav shipped for a while writing exactly that, which put "this
-        // export is not in metres" in front of users whose export was in
-        // metres. Reading silence as the default it already is beats being
+        // export is not in metres" in front of users whose export was in metres
+        // all along. Reading silence as the default it already is beats being
         // loudly wrong about a correct file.
         return u.isEmpty || u.hasPrefix("met") || u == "m"
     }
@@ -179,7 +179,7 @@ struct NavProvenance: Codable, Equatable {
     ///
     /// It matters because the turn is applied to the geometry and the bounding
     /// box but not to `appliedOffset`, which stays in the source document's
-    /// frame — so anything crossing between a `points.json` and an
+    /// frame -- so anything crossing between a `points.json` and an
     /// `ar-model.json` has to subtract the offset first and turn second, in
     /// that order.
     var turnedToYUp: Bool {

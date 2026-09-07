@@ -246,9 +246,7 @@ struct ReceiverScanView: View {
 
     /// Written out as statements rather than inline in the `Text`: the inlined
     /// version mixed interpolation, `+` and two ternaries in one expression,
-    /// which the type checker could not solve in reasonable time. It is not a
-    /// slow expression, it is an unsolvable one -- Xcode gives up rather than
-    /// finishing late, so the build fails outright.
+    /// which the type checker could not solve in reasonable time.
     private var hiddenSummary: String {
         let count: Int = scanner.hiddenCount
         if count == 0 { return "Nothing is being hidden." }

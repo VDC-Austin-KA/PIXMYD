@@ -331,6 +331,11 @@ private struct MarkerAlignContainer: UIViewRepresentable {
             // depth measurement of the surface the mark is printed on. An
             // estimated plane is the fallback and is worth having, because a
             // column face is a plane and the estimate is usually close.
+            // `ARSCNView.raycastQuery` returns an Optional -- unlike
+            // `ARFrame.raycastQuery`, which does not. The two read identically
+            // at the call site and differ in exactly that, which is how one
+            // sweep to "fix Xcode 26's non-optional raycastQuery" unwrapped
+            // both and broke this one.
             var target: SIMD3<Float>?
             for alignment in [ARRaycastQuery.TargetAlignment.any] {
                 if let onGeometry = view.raycastQuery(

@@ -194,11 +194,19 @@ enum Exporters {
             }
         }
 
+        // A photo-textured atlas gives every corner its own coordinate inside
+        // that triangle's tile, so it needs three `vt` per face. The flat atlas
+        // gives all three corners the same texel centre, and writing that one
+        // three times would triple the coordinate list of a 200,000-triangle
+        // export to say the same thing.
+        var cornerUvs: [SIMD2<Float>]?
+        if let candidate = atlas?.cornerUvs, candidate.count >= indices.count {
+            cornerUvs = candidate
+        }
         if let atlas {
-            // One texture coordinate per triangle. OBJ's V axis points up from
-            // the bottom-left of the image, so the atlas's image-space V is
-            // flipped here.
-            for uv in atlas.triangleUvs {
+            // OBJ's V axis points up from the bottom-left of the image, so the
+            // atlas's image-space V is flipped here.
+            for uv in cornerUvs ?? atlas.triangleUvs {
                 try out.line("vt \(fmt(uv.x)) \(fmt(1 - uv.y))")
             }
             try out.line("usemtl \(safeStem)-material")
@@ -206,20 +214,24 @@ enum Exporters {
 
         for triangle in 0..<triangleCount {
             let base = triangle * 3
-            // OBJ indices are 1-based.
+            // OBJ indices are 1-based. Per-corner coordinates run one per
+            // polygon corner, so a triangle's three are at base + 1, 2, 3;
+            // the flat atlas has a single one per face.
             let a = Int(indices[base]) + 1
             let b = Int(indices[base + 1]) + 1
             let c = Int(indices[base + 2]) + 1
-            let t = triangle + 1
+            let (ta, tb, tc) = cornerUvs == nil
+                ? (triangle + 1, triangle + 1, triangle + 1)
+                : (base + 1, base + 2, base + 3)
 
-            let corner: (Int) -> String
+            let corner: (Int, Int) -> String
             switch (atlas != nil, vertexNormals != nil) {
-            case (true, true):   corner = { "\($0)/\(t)/\($0)" }
-            case (true, false):  corner = { "\($0)/\(t)" }
-            case (false, true):  corner = { "\($0)//\($0)" }
-            case (false, false): corner = { "\($0)" }
+            case (true, true):   corner = { "\($0)/\($1)/\($0)" }
+            case (true, false):  corner = { "\($0)/\($1)" }
+            case (false, true):  corner = { v, _ in "\(v)//\(v)" }
+            case (false, false): corner = { v, _ in "\(v)" }
             }
-            try out.line("f \(corner(a)) \(corner(b)) \(corner(c))")
+            try out.line("f \(corner(a, ta)) \(corner(b, tb)) \(corner(c, tc))")
         }
 
         try out.flush()
@@ -335,13 +347,64 @@ enum Exporters {
     // MARK: - GLB
 
     /// glTF 2.0 binary. One file, no sidecars, opens in nearly everything.
+    ///
+    /// `polygonUvs` is one coordinate per polygon corner — the shape the atlas
+    /// bakers produce. glTF indexes exactly one coordinate per *vertex*, so
+    /// when a texture is present the mesh is expanded to one vertex per corner
+    /// first. That triples the vertex count, which is the price of a texture in
+    /// a format with no second index; a shared-vertex mesh cannot carry two
+    /// different texture coordinates at the same corner, and the atlas gives
+    /// every triangle its own tile precisely so that it can.
     static func writeGlb(
-        positions: [SIMD3<Float>],
-        normals: [SIMD3<Float>]?,
-        colors: [SIMD3<UInt8>]?,
-        indices: [UInt32],
+        positions rawPositions: [SIMD3<Float>],
+        normals rawNormals: [SIMD3<Float>]?,
+        colors rawColors: [SIMD3<UInt8>]?,
+        indices rawIndices: [UInt32],
+        polygonUvs: [SIMD2<Float>]? = nil,
+        texture: TsdfVolume.TextureImage? = nil,
         to url: URL
     ) throws {
+        var positions = rawPositions
+        var normals = rawNormals
+        var colors = rawColors
+        var indices = rawIndices
+        var uvs: [SIMD2<Float>]?
+
+        if let polygonUvs, texture != nil, polygonUvs.count >= rawIndices.count,
+           !rawIndices.isEmpty {
+            var expandedPositions = [SIMD3<Float>]()
+            var expandedNormals: [SIMD3<Float>]? = rawNormals == nil ? nil : []
+            var expandedIndices = [UInt32]()
+            expandedPositions.reserveCapacity(rawIndices.count)
+            expandedIndices.reserveCapacity(rawIndices.count)
+
+            for (corner, vertex) in rawIndices.enumerated() {
+                let index = Int(vertex)
+                guard index >= 0, index < rawPositions.count else { continue }
+                expandedPositions.append(rawPositions[index])
+                if let rawNormals, index < rawNormals.count {
+                    expandedNormals?.append(rawNormals[index])
+                } else {
+                    expandedNormals = nil
+                }
+                expandedIndices.append(UInt32(corner))
+            }
+            // Only adopt the expansion if nothing was skipped, or the indices
+            // would no longer describe the triangles they came from.
+            if expandedPositions.count == rawIndices.count {
+                positions = expandedPositions
+                normals = expandedNormals
+                // Vertex colour is dropped, not kept alongside: glTF multiplies
+                // COLOR_0 into the base colour, so a mesh carrying both would
+                // arrive with the photograph darkened by roughly its own square.
+                // The texture is the better of the two answers anyway — it is
+                // the same colour at a hundred times the detail.
+                colors = nil
+                indices = expandedIndices
+                uvs = Array(polygonUvs.prefix(rawIndices.count))
+            }
+        }
+
         var binary = Data()
 
         func align(_ data: inout Data, to boundary: Int, with byte: UInt8) {
@@ -377,6 +440,24 @@ enum Exporters {
             colorOffset = binary.count
             for c in colors { binary.append(contentsOf: [c.x, c.y, c.z]) }
             colorLength = binary.count - colorOffset
+            align(&binary, to: 4, with: 0)
+        }
+
+        var uvOffset = 0
+        var uvLength = 0
+        if let uvs {
+            uvOffset = binary.count
+            // glTF's texture space has its origin at the top left with V
+            // increasing downward, which is the atlas's own convention, so
+            // unlike OBJ and FBX nothing is flipped here.
+            for uv in uvs {
+                for component in [uv.x, uv.y] {
+                    withUnsafeBytes(of: component.bitPattern.littleEndian) {
+                        binary.append(contentsOf: $0)
+                    }
+                }
+            }
+            uvLength = binary.count - uvOffset
             align(&binary, to: 4, with: 0)
         }
 
@@ -425,28 +506,73 @@ enum Exporters {
             attributes["COLOR_0"] = accessors.count - 1
         }
 
+        if uvs != nil {
+            views.append(["buffer": 0, "byteOffset": uvOffset, "byteLength": uvLength, "target": 34962])
+            accessors.append([
+                "bufferView": views.count - 1, "componentType": 5126,
+                "count": positions.count, "type": "VEC2",
+            ])
+            attributes["TEXCOORD_0"] = accessors.count - 1
+        }
+
         views.append(["buffer": 0, "byteOffset": indexOffset, "byteLength": indexLength, "target": 34963])
         accessors.append([
             "bufferView": views.count - 1, "componentType": 5125,
             "count": indices.count, "type": "SCALAR",
         ])
+        let indexAccessor = accessors.count - 1
 
-        let json: [String: Any] = [
+        var primitive: [String: Any] = [
+            "attributes": attributes,
+            "indices": indexAccessor,
+            "mode": 4,
+        ]
+        var json: [String: Any] = [
             "asset": ["version": "2.0", "generator": "PIXMYD"],
             "scene": 0,
             "scenes": [["nodes": [0]]],
             "nodes": [["mesh": 0]],
-            "meshes": [[
-                "primitives": [[
-                    "attributes": attributes,
-                    "indices": accessors.count - 1,
-                    "mode": 4,
-                ]]
-            ]],
-            "accessors": accessors,
-            "bufferViews": views,
-            "buffers": [["byteLength": binary.count]],
         ]
+
+        if let texture, uvs != nil {
+            let imageOffset = binary.count
+            binary.append(contentsOf: texture.data)
+            let imageLength = binary.count - imageOffset
+            align(&binary, to: 4, with: 0)
+            // No target: this view holds an encoded image, not vertex data, and
+            // a validator rejects ARRAY_BUFFER on it.
+            views.append([
+                "buffer": 0, "byteOffset": imageOffset, "byteLength": imageLength,
+            ])
+
+            json["images"] = [["bufferView": views.count - 1, "mimeType": texture.mimeType]]
+            // Linear magnification and linear minification, deliberately with
+            // no mipmaps. The atlas packs unrelated triangles side by side with
+            // a single texel of gutter; a mip chain averages across tile
+            // boundaries and would smear one wall's texture onto another's at
+            // the first level, which is exactly the detail this is here to
+            // preserve. Clamped, because nothing in an atlas should ever wrap.
+            json["samplers"] = [[
+                "magFilter": 9729, "minFilter": 9729, "wrapS": 33071, "wrapT": 33071,
+            ]]
+            json["textures"] = [["sampler": 0, "source": 0]]
+            json["materials"] = [[
+                "name": "PIXMYD",
+                "pbrMetallicRoughness": [
+                    "baseColorTexture": ["index": 0],
+                    "baseColorFactor": [1.0, 1.0, 1.0, 1.0],
+                    "metallicFactor": 0.0,
+                    "roughnessFactor": 0.9,
+                ],
+                "doubleSided": true,
+            ]]
+            primitive["material"] = 0
+        }
+
+        json["meshes"] = [["primitives": [primitive]]]
+        json["accessors"] = accessors
+        json["bufferViews"] = views
+        json["buffers"] = [["byteLength": binary.count]]
 
         var jsonData = try JSONSerialization.data(withJSONObject: json)
         // The JSON chunk pads with spaces and the binary chunk with zeros —

@@ -18,19 +18,7 @@ struct SiteBundleView: View {
 
     @State private var uploading = false
     @State private var confirmingDelete = false
-    @State private var placing = false
-    @State private var showingModel = false
-
-    /// The bundle as the store currently holds it.
-    ///
-    /// Not the one the navigation link handed over: placing a mark rewrites
-    /// the set on disk and reloads the list, and a screen rendering from the
-    /// captured value would go on showing the point count it was opened with.
-    /// Falling back to that value keeps the screen readable for the moment
-    /// between a delete and the dismiss that follows it.
-    private var current: StoredNavBundle {
-        site.bundles.first { $0.id == bundle.id } ?? bundle
-    }
+    @State private var showingOverlay = false
 
     var body: some View {
         ScrollView {
@@ -72,6 +60,9 @@ struct SiteBundleView: View {
             if let set = current.pointSet {
                 CaptureSendView(pointSet: set)
             }
+        }
+        .fullScreenCover(isPresented: $showingOverlay) {
+            ArModelView(bundle: bundle)
         }
         .confirmationDialog(
             "Remove \(current.displayName)?",
@@ -269,17 +260,28 @@ struct SiteBundleView: View {
                     .foregroundStyle(Theme.Palette.textSecondary)
             }
             if ar.hasGeometry {
-                FieldButton(title: "Place it in the room", systemImage: "arkit", role: .primary) {
-                    showingModel = true
-                }
-                Text(anchoringText)
+                // Anchored on the located points, so the readiness line says
+                // what is missing rather than the button doing nothing.
+                let readiness = ArModelPlacement.readiness(
+                    hasGeometry: true,
+                    pointSet: bundle.pointSet,
+                    located: bundle.pointSet.map { site.observedCount(setId: $0.setId) } ?? 0,
+                    solved: bundle.pointSet.flatMap { site.solve(for: $0) })
+
+                Text(readiness.summary)
                     .font(Theme.Typeface.caption)
-                    .foregroundStyle(Theme.Palette.textSecondary)
+                    .foregroundStyle(readiness.canDraw ? Theme.Palette.textSecondary : Theme.Palette.caution)
                     .fixedSize(horizontal: false, vertical: true)
+
+                FieldButton(title: "Show over the room", systemImage: "cube.transparent", role: .primary) {
+                    showingOverlay = true
+                }
+                .disabled(!readiness.canDraw)
+                .opacity(readiness.canDraw ? 1 : 0.5)
             } else {
                 Text("No geometry was exported with this bundle, so the model cannot be drawn over "
-                   + "the room. The box and the reference photo still show where it is. "
-                   + "Re-export it from PIXMYD-Nav with \"Include model geometry\" ticked.")
+                   + "the room. Export it again from PIXMYD-Nav with \"Include model geometry\" "
+                   + "ticked. The box and the reference photo still show where it is.")
                     .font(Theme.Typeface.caption)
                     .foregroundStyle(Theme.Palette.caution)
                     .fixedSize(horizontal: false, vertical: true)

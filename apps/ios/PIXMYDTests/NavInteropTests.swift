@@ -612,8 +612,14 @@ final class NavInteropTests: XCTestCase {
         XCTAssertEqual(provenance["navex:targetUnits"] as? String, "Meters")
 
         let geometry = try XCTUnwrap(root["geometry"] as? [String: Any])
+        // FBX, not GLB: appending a file is the only way a Navisworks plugin
+        // can put geometry into an open document, and Navisworks does not read
+        // GLB. See CaptureUpload.
         XCTAssertEqual(geometry["file"] as? String, "capture.fbx")
         XCTAssertEqual(geometry["bytes"] as? Int, 12_882_110)
+        // Which frame the mesh is in. Absent, a consumer assumes `capture`,
+        // which is what every file written before this field existed contained.
+        XCTAssertEqual(geometry["frame"] as? String, "capture")
 
         XCTAssertEqual(root["capturedUtc"] as? String, "2026-02-02T02:40:00.000Z")
     }
@@ -638,15 +644,40 @@ final class NavInteropTests: XCTestCase {
         XCTAssertEqual((root["correspondences"] as? [[String: Any]])?.count, 2)
     }
 
-    /// The solver's own message is surfaced rather than replaced. "Needs at
-    /// least 3 points" is actionable; "registration failed" is not.
-    func testTooFewCorrespondencesSurfacesTheSolversOwnMessage() throws {
+    /// Two points used to be refused. They are not any more: both frames know
+    /// which way down is, so holding the vertical leaves heading and
+    /// translation, which two points over-determine.
+    ///
+    /// This is the change that lets a crew who could reach two column marks
+    /// send a scan home that lands where it belongs.
+    func testTwoCorrespondencesSolveWithTheVerticalHeld() throws {
         let set = try makeThreePointSet()
         let pair = Array(makeCorrespondences().prefix(2))
-        XCTAssertThrowsError(try CaptureExport.solve(pointSet: set, correspondences: pair)) { error in
-            guard case RegistrationError.tooFewPairs = error else {
-                return XCTFail("expected tooFewPairs, got \(error)")
+        let solved = try CaptureExport.solve(pointSet: set, correspondences: pair)
+
+        XCTAssertTrue(solved.solution.verticalHeld,
+                      "two points must be solved with the vertical held, not with Horn's method")
+        XCTAssertEqual(solved.solution.pairCount, 2)
+        // The fixture's transform is a pure translation, which a constrained
+        // solve recovers exactly.
+        XCTAssertEqual(solved.solution.rmsError, 0, accuracy: 1e-9)
+        // And no outliers are claimed: leave-one-out needs four points, and
+        // inventing a verdict from two would be worse than having none.
+        XCTAssertTrue(solved.outlierPointIds.isEmpty)
+    }
+
+    /// One point is still refused, and the solver's own message is surfaced
+    /// rather than replaced. "One point fixes where the scan sits and nothing
+    /// about which way it faces" is actionable; "registration failed" is not.
+    func testOnePointIsRefusedWithTheSolversOwnMessage() throws {
+        let set = try makeThreePointSet()
+        let one = Array(makeCorrespondences().prefix(1))
+        XCTAssertThrowsError(try CaptureExport.solve(pointSet: set, correspondences: one)) { error in
+            guard case let RegistrationError.tooFewPairsForGravity(count) = error else {
+                return XCTFail("expected tooFewPairsForGravity, got \(error)")
             }
+            XCTAssertEqual(count, 1)
+            XCTAssertTrue("\(error)".contains("which way it faces"))
         }
     }
 

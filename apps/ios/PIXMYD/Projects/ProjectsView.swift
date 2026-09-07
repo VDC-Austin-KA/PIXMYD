@@ -161,6 +161,7 @@ struct ProjectDetailView: View {
     @EnvironmentObject private var router: AppRouter
     @StateObject private var processor = ProcessingPipeline()
     @State private var showExport = false
+    @State private var showSend = false
 
     private var project: CaptureProject? {
         store.projects.first { $0.id == id }
@@ -226,6 +227,7 @@ struct ProjectDetailView: View {
                     }
                 }
 
+                controlPoints(project)
                 actions(project)
             }
             .padding(Theme.Metrics.gutter)
@@ -233,6 +235,11 @@ struct ProjectDetailView: View {
         .background(Theme.Palette.background)
         .sheet(isPresented: $showExport) {
             ExportSheet(project: project)
+        }
+        .sheet(isPresented: $showSend) {
+            // No point set from the workstation: this scan carries the points
+            // that were placed on it, and the registration happens there.
+            CaptureSendView(pointSet: nil)
         }
         .onChange(of: processor.state) { _, newState in
             report(newState, for: project)
@@ -247,6 +254,41 @@ struct ProjectDetailView: View {
             if let mesh = processor.reviewMesh {
                 ModelViewer(mesh: mesh) { edited in
                     processor.saveReviewed(mesh: edited, project: project)
+                }
+            }
+        }
+    }
+
+    /// The points placed during this capture, and what they can support.
+    ///
+    /// On the project screen as well as the capture screen because this is
+    /// where somebody looks a week later, when the question is "can this scan
+    /// still be put on the model" and the honest answer depends on how many
+    /// points were placed and how far apart.
+    @ViewBuilder
+    private func controlPoints(_ project: CaptureProject) -> some View {
+        if let set = FieldPointSet.load(in: project.url), !set.isEmpty {
+            Panel(title: "Control points") {
+                HStack(spacing: Theme.Metrics.gutter * 1.4) {
+                    Readout(label: "Placed", value: "\(set.points.count)")
+                    Readout(
+                        label: "Spread",
+                        value: String(format: "%.1f", set.baselineMetres),
+                        unit: "m"
+                    )
+                    Readout(
+                        label: "Measured",
+                        value: "\(set.points.filter { $0.source.isMeasured }.count)",
+                        tone: set.points.allSatisfy { $0.source.isMeasured } ? .good : .caution
+                    )
+                }
+                Text(CaptureExport.registrationReadiness(set))
+                    .font(Theme.Typeface.caption)
+                    .foregroundStyle(Theme.Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                FieldButton(title: "Send to PIXMYD-Nav", systemImage: "arrow.up.doc", role: .secondary) {
+                    showSend = true
                 }
             }
         }
