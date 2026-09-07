@@ -105,9 +105,41 @@ final class FbxWriterTests: XCTestCase {
         let file = url("mesh.fbx")
         try FbxWriter.writeMesh(positions: positions, normals: nil, colors: nil, indices: [0, 1, 2], to: file)
         let bytes = try Data(contentsOf: file)
-        // Cutting the file in half must be a parse error, not a silent
-        // partial mesh.
-        XCTAssertThrowsError(try FbxWriter.parse(bytes.prefix(bytes.count / 2)))
+
+        let whole = try FbxWriter.parse(bytes)
+        let wholeNames = whole.map(\.name)
+        let wholeVertices = try XCTUnwrap(
+            FbxWriter.findNode(whole, named: "Vertices")?.props[0] as? [Double])
+
+        // Cut at many points rather than one. Where the halfway byte falls is a
+        // fact about the node layout, not about truncation, so a test that cuts
+        // once starts passing — or failing — for the wrong reason the moment a
+        // section is added.
+        //
+        // The invariant is not "every prefix throws". A cut inside the trailing
+        // footer leaves the node list complete, and a walk that terminates at
+        // its own NULL record cannot see past it to know bytes are missing;
+        // that is the format, not a defect. What must never happen is a prefix
+        // that parses into a document presenting as whole while missing part of
+        // the mesh. So: parse, or be complete.
+        let step = max(1, bytes.count / 128)
+        for cut in stride(from: 27, to: bytes.count, by: step) {
+            let nodes: [FbxWriter.ParsedNode]
+            do {
+                nodes = try FbxWriter.parse(bytes.prefix(cut))
+            } catch {
+                continue    // the expected outcome, and what most cuts do
+            }
+            XCTAssertEqual(
+                nodes.map(\.name), wholeNames,
+                "a \(cut)-byte prefix of \(bytes.count) parsed into a partial document"
+            )
+            XCTAssertEqual(
+                FbxWriter.findNode(nodes, named: "Vertices")?.props[0] as? [Double],
+                wholeVertices,
+                "a \(cut)-byte prefix parsed but its mesh is not the whole mesh"
+            )
+        }
     }
 
     // MARK: - Geometry
