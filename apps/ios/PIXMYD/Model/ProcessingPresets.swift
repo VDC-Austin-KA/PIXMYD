@@ -36,8 +36,8 @@ enum ProcessingQuality: String, CaseIterable, Identifiable {
         case .balanced:
             "25 mm voxels. The right default for as-built documentation."
         case .fine:
-            "12 mm voxels. Slow and memory-hungry; use it on a single room, "
-                + "not a floorplate."
+            "12 mm voxels. Several minutes for a floorplate, and the detail "
+                + "a 12 mm feature needs to survive."
         }
     }
 
