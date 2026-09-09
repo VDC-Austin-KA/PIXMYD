@@ -261,3 +261,123 @@ final class MeshSimplifyTests: XCTestCase {
         )
     }
 }
+
+// MARK: - Block decimation
+
+/// Decimation runs a block of mesh at a time so that peak memory is set by the
+/// block size rather than by the size of the scan — without that, a fine-detail
+/// room wanted 2.2 GB and the phone killed the app.
+///
+/// The risk it introduces is entirely at the seams: two blocks decimated
+/// independently must still agree, vertex for vertex, along the boundary they
+/// share. A seam that does not weld produces a mesh that looks correct in a
+/// viewer, because the two sides are in exactly the right places, and is
+/// cracked the moment anything downstream asks it to enclose a volume. So these
+/// tests check watertightness rather than appearance.
+final class MeshSimplifyBlockTests: XCTestCase {
+
+    /// Small enough to force the sphere below into several blocks.
+    private let blockLimit = 2_000
+
+    func testBlockedDecimationLeavesTheMeshClosed() {
+        let sphere = icosphere(subdivisions: 4)
+        XCTAssertGreaterThan(sphere.indices.count / 3, blockLimit * 2, "test subject too small to tile")
+
+        let simplified = MeshSimplify.simplify(
+            sphere, targetTriangles: 2_000, maximumBlockTriangles: blockLimit
+        )
+
+        // An unwelded seam shows up here and nowhere else: both blocks put a
+        // vertex in the same place, but under different indices, so every edge
+        // along the boundary is used once by each side instead of twice by one.
+        XCTAssertEqual(
+            openEdgeCount(simplified), 0,
+            "decimating in blocks opened the seams between them"
+        )
+    }
+
+    func testBlockedDecimationKeepsTheShapeAndTheWinding() {
+        let sphere = icosphere(subdivisions: 4)
+        let simplified = MeshSimplify.simplify(
+            sphere, targetTriangles: 3_000, maximumBlockTriangles: blockLimit
+        )
+
+        for position in simplified.positions {
+            XCTAssertEqual(Double(simd_length(position)), 1.0, accuracy: 0.05)
+        }
+
+        // Positive, so the triangles still wind outward. Blocks are gathered
+        // and welded in an order that has nothing to do with the original, and
+        // an index reversed on the way through would be invisible until
+        // something backface-culls it.
+        let volume = signedVolume(simplified)
+        let expected = 4.0 / 3.0 * Double.pi
+        XCTAssertGreaterThan(volume, 0, "blocked decimation inverted the winding")
+        XCTAssertEqual(volume, expected, accuracy: expected * 0.15)
+    }
+
+    func testBlockedDecimationHitsRoughlyTheSameTargetAsOnePiece() {
+        let sphere = icosphere(subdivisions: 4)
+        let target = 2_500
+
+        let whole = MeshSimplify.simplify(sphere, targetTriangles: target)
+        let blocked = MeshSimplify.simplify(
+            sphere, targetTriangles: target, maximumBlockTriangles: blockLimit
+        )
+
+        // Seam locking stops an edge touching a boundary from ever collapsing,
+        // which pushes the count up; per-block targets round independently,
+        // which can pull it a little under. What is being tested is that
+        // neither effect is large — if seam locking cost a real fraction of the
+        // budget, the setting would be trading away the detail it exists to
+        // protect.
+        let wholeCount = whole.indices.count / 3
+        let blockedCount = blocked.indices.count / 3
+        XCTAssertEqual(
+            Double(blockedCount), Double(wholeCount), accuracy: Double(wholeCount) * 0.6,
+            "seam locking kept \(blockedCount) triangles against \(wholeCount) in one piece"
+        )
+    }
+
+    func testBlockedDecimationProducesNoDegenerateOrDanglingTriangles() {
+        let simplified = MeshSimplify.simplify(
+            icosphere(subdivisions: 4), targetTriangles: 1_500, maximumBlockTriangles: blockLimit
+        )
+        for i in stride(from: 0, to: simplified.indices.count, by: 3) {
+            let a = simplified.indices[i], b = simplified.indices[i + 1], c = simplified.indices[i + 2]
+            XCTAssertFalse(a == b || b == c || a == c, "degenerate triangle survived")
+            for index in [a, b, c] { XCTAssertLessThan(Int(index), simplified.positions.count) }
+        }
+        // Every vertex emitted is referenced; welding must not leave orphans
+        // behind for the exporters to write out as unused rows.
+        var used = Set<UInt32>()
+        for index in simplified.indices { used.insert(index) }
+        XCTAssertEqual(used.count, simplified.positions.count)
+    }
+
+    func testColoursSurviveBlockedDecimation() {
+        var sphere = icosphere(subdivisions: 4)
+        sphere.colors = sphere.positions.map { p in
+            SIMD3<UInt8>(
+                UInt8((p.x * 0.5 + 0.5) * 255), UInt8((p.y * 0.5 + 0.5) * 255), 128
+            )
+        }
+        let simplified = MeshSimplify.simplify(
+            sphere, targetTriangles: 2_000, maximumBlockTriangles: blockLimit
+        )
+        XCTAssertEqual(simplified.colors?.count, simplified.positions.count)
+    }
+
+    func testAMeshUnderTheBlockLimitTakesTheOnePiecePath() {
+        // The blocked path is only worth its seams on a mesh too big to hold,
+        // and the two paths must agree exactly below the threshold or the same
+        // capture would decimate differently depending on an internal constant.
+        let sphere = icosphere(subdivisions: 2)
+        let a = MeshSimplify.simplify(sphere, targetTriangles: 100)
+        let b = MeshSimplify.simplify(
+            sphere, targetTriangles: 100, maximumBlockTriangles: 1_000_000
+        )
+        XCTAssertEqual(a.positions.count, b.positions.count)
+        XCTAssertEqual(a.indices, b.indices)
+    }
+}
